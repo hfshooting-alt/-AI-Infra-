@@ -1,0 +1,18 @@
+{
+  "name": "ljg-paper",
+  "description": "Academic paper deep reader with atom pipeline",
+  "owner": {
+    "name": "lijigang"
+  },
+  "metadata": {
+    "description": "Takes an academic paper (URL, PDF, or file), runs the atom pipeline (split, squeeze, plain, feynman, napkin sketch, advisor review), and synthesizes a fluent analysis. Focus: what gap does it fill, and would a seasoned advisor take it seriously?",
+    "version": "1.4.0"
+  },
+  "plugins": [
+    {
+      "name": "ljg-paper",
+      "source": "./",
+      "description": "Deep-read academic papers through a structured cognitive pipeline, outputting Org-mode analysis files."
+    }
+  ]
+}
