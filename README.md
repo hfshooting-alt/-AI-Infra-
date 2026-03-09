@@ -98,3 +98,24 @@ python daily_paper_agent.py
 - `SMTP_PASS`（163客户端授权码）
 
 你也可以把 `send_email()` 替换为你现有发送函数，其他逻辑无需改动。
+
+
+### GitHub Actions 定时（北京时间早上10点）
+
+仓库已提供工作流：`.github/workflows/daily-paper-digest.yml`。
+
+- 已固定按 *北京时间 10:00* 触发（对应 UTC `02:00`）。
+- 也支持手动触发（`workflow_dispatch`）先试跑。
+
+你需要在 GitHub 仓库 `Settings -> Secrets and variables -> Actions -> Secrets` 中配置：
+
+**必填**
+- `OPENAI_API_KEY`
+- `REPORT_EMAIL_TO`
+- `SMTP_PASS`（163客户端授权码）
+
+**建议填写（不填会自动回退）**
+- `REPORT_EMAIL_FROM`（默认回退到 `REPORT_EMAIL_TO`）
+- `SMTP_USER`（默认回退到 `REPORT_EMAIL_FROM` 或 `REPORT_EMAIL_TO`）
+- `SMTP_HOST`（默认 `smtp.163.com`）
+- `SMTP_PORT`（默认 `465`）
