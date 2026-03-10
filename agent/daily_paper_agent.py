@@ -619,17 +619,21 @@ def has_readable_fulltext(fulltext_context: str) -> bool:
 def build_prompt(paper: Paper, category: str, fulltext_context: str) -> str:
     return textwrap.dedent(
         f"""
-        你是论文原文信息整理 Agent。你必须先通读提供的正文内容，再输出。
-        只允许写“论文标题、摘要、正文”明确出现的信息，不得补充推断，不得主观延伸。
+        你是论文原文信息整理 Agent。目标是给非专业读者输出“准确、完整、可读”的三段解读。
+
+        工作方式（请先内部执行，再输出最终答案）：
+        1) 先从正文提取：研究问题、已有局限、核心方法步骤、实验结论、作者写明的局限与未来方向。
+        2) 仅保留标题/摘要/正文明确支持的信息；不补充推断，不脑补结论。
+        3) 重新组织成清晰中文短句，避免术语堆砌与半句收尾。
 
         严格输出以下四行，不要输出其它字段：
-        一句话核心：<一句话完整说明论文做了什么、解决什么问题、得到什么结果；句子必须完整，以句号结尾；仅基于原文>
-        论文背景：<2-3句，包含背景与创新点，只写原文可证实内容>
-        方法与结果：<2-3句，只写原文方法步骤和结果；若无量化写“原文未披露具体幅度”>
-        局限与展望：<2-3句，只写作者明确提到的限制与未来方向>
+        一句话核心：<一句话完整说明论文做了什么、解决什么问题、得到什么结果；必须是完整句>
+        论文背景：<2-3句，包含“背景局限+论文创新点”，只写可证实内容>
+        方法与结果：<2-3句，写清方法主线与结果；无量化就写“原文未披露具体幅度”>
+        局限与展望：<2-3句，只写作者明确提到的边界与后续方向>
 
         语言要求：
-        用短句、少术语、易读。避免堆砌和语病。
+        短句优先。易懂优先。禁止残句、禁止“推理…/指标…/性能和…”这种未说完的结尾。
 
         论文分类：{category}
         标题：{paper.title}
@@ -660,50 +664,57 @@ def clean_symbols(text: str) -> str:
 
 
 def parse_structured_analysis(text: str) -> Dict[str, str]:
-    keys = [
-        "一句话核心",
-        "论文背景",
-        "方法与结果",
-        "局限与展望",
-    ]
+    keys = ["一句话核心", "论文背景", "方法与结果", "局限与展望"]
+    aliases = {
+        "一句话核心": "一句话核心",
+        "论文背景": "论文背景",
+        "背景": "论文背景",
+        "方法与结果": "方法与结果",
+        "论文方法与结果": "方法与结果",
+        "局限与展望": "局限与展望",
+        "论文局限与展望": "局限与展望",
+    }
+
     data: Dict[str, str] = {k: "未披露" for k in keys}
     for line in clean_symbols(text).splitlines():
-        s = line.strip()
-        if "：" not in s:
+        sline = line.strip()
+        if "：" not in sline:
             continue
-        k, v = s.split("：", 1)
-        k = k.strip()
-        if k in data and v.strip():
+        k, v = sline.split("：", 1)
+        k = aliases.get(k.strip(), "")
+        if k and v.strip():
             data[k] = v.strip()
 
     if data["方法与结果"].strip() in ["未披露", "摘要未披露", "未知", "不详"]:
         data["方法与结果"] = "原文未披露具体幅度。"
 
-    max_len = {
-        "一句话核心": 96,
-        "论文背景": 220,
-        "方法与结果": 220,
-        "局限与展望": 200,
-    }
-    for k, m in max_len.items():
-        data[k] = _trim_complete(data[k], m)
-
-    # extra guard for "一句话核心" ending with dangling conjunction
-    data["一句话核心"] = re.sub(r"(和|及|与|并|以及|并且|等)[。！？]$", "。", data["一句话核心"])
-    data["一句话核心"] = _finalize_sentence(data["一句话核心"])
+    # keep complete sentences; no hard character truncation artifacts
+    data["一句话核心"] = _keep_first_sentences(_finalize_sentence(data["一句话核心"]), 1)
+    data["论文背景"] = _keep_first_sentences(_finalize_sentence(data["论文背景"]), 3)
+    data["方法与结果"] = _keep_first_sentences(_finalize_sentence(data["方法与结果"]), 3)
+    data["局限与展望"] = _keep_first_sentences(_finalize_sentence(data["局限与展望"]), 3)
     return data
 
 
 
-
 def _finalize_sentence(text: str) -> str:
-    t = re.sub(r"\s+", " ", (text or "")).strip()
+    t = re.sub(r"\s+", " ", (text or "")).replace("…", "").strip()
     if not t:
         return "未披露。"
     t = re.sub(r"(和|及|与|并|以及|并且|等)\s*[。！？]$", "。", t)
+    t = re.sub(r"，[^，。！？；]{1,2}[。！？]$", "。", t)
     if not re.search(r"[。！？]$", t):
         t += "。"
     return t
+
+
+def _keep_first_sentences(text: str, max_sentences: int) -> str:
+    t = _finalize_sentence(text)
+    pieces = [x.strip() for x in re.split(r"(?<=[。！？])", t) if x.strip()]
+    if not pieces:
+        return t
+    out = "".join(pieces[:max_sentences]).strip()
+    return _finalize_sentence(out)
 
 
 def _trim_complete(text: str, max_len: int) -> str:
@@ -714,7 +725,7 @@ def _trim_complete(text: str, max_len: int) -> str:
     m = max(window.rfind("。"), window.rfind("！"), window.rfind("？"), window.rfind("；"))
     if m >= int(max_len * 0.5):
         return window[:m + 1]
-    return re.sub(r"(和|及|与|并|以及|并且|等)$", "", window[: max_len - 1].rstrip("，、；： ")) + "…"
+    return _finalize_sentence(re.sub(r"(和|及|与|并|以及|并且|等)$", "", window[: max_len - 1].rstrip("，、；： ")) )
 
 
 def confidence_level(paper: Paper) -> str:
