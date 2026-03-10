@@ -623,7 +623,7 @@ def build_prompt(paper: Paper, category: str, fulltext_context: str) -> str:
         只允许写“论文标题、摘要、正文”明确出现的信息，不得补充推断，不得主观延伸。
 
         严格输出以下四行，不要输出其它字段：
-        一句话核心：<一句话完整说明论文做了什么、解决什么问题、得到什么结果；仅基于原文>
+        一句话核心：<一句话完整说明论文做了什么、解决什么问题、得到什么结果；句子必须完整，以句号结尾；仅基于原文>
         论文背景：<2-3句，包含背景与创新点，只写原文可证实内容>
         方法与结果：<2-3句，只写原文方法步骤和结果；若无量化写“原文未披露具体幅度”>
         局限与展望：<2-3句，只写作者明确提到的限制与未来方向>
@@ -686,9 +686,35 @@ def parse_structured_analysis(text: str) -> Dict[str, str]:
         "局限与展望": 200,
     }
     for k, m in max_len.items():
-        if len(data[k]) > m:
-            data[k] = data[k][:m].rstrip("，；。 ") + "。"
+        data[k] = _trim_complete(data[k], m)
+
+    # extra guard for "一句话核心" ending with dangling conjunction
+    data["一句话核心"] = re.sub(r"(和|及|与|并|以及|并且|等)[。！？]$", "。", data["一句话核心"])
+    data["一句话核心"] = _finalize_sentence(data["一句话核心"])
     return data
+
+
+
+
+def _finalize_sentence(text: str) -> str:
+    t = re.sub(r"\s+", " ", (text or "")).strip()
+    if not t:
+        return "未披露。"
+    t = re.sub(r"(和|及|与|并|以及|并且|等)\s*[。！？]$", "。", t)
+    if not re.search(r"[。！？]$", t):
+        t += "。"
+    return t
+
+
+def _trim_complete(text: str, max_len: int) -> str:
+    t = _finalize_sentence(text)
+    if len(t) <= max_len:
+        return t
+    window = t[:max_len]
+    m = max(window.rfind("。"), window.rfind("！"), window.rfind("？"), window.rfind("；"))
+    if m >= int(max_len * 0.5):
+        return window[:m + 1]
+    return re.sub(r"(和|及|与|并|以及|并且|等)$", "", window[: max_len - 1].rstrip("，、；： ")) + "…"
 
 
 def confidence_level(paper: Paper) -> str:
