@@ -365,6 +365,25 @@ def collect_recent_papers() -> Tuple[List[Paper], Dict[str, int]]:
     return dedup_rank(got), counts
 
 
+
+
+def classify_paper(paper: Paper) -> str:
+    txt = normalize(f"{paper.title} {paper.abstract}")
+    world_keywords = ["world engine", "world model", "world simulator", "世界引擎", "世界模型", "digital twin"]
+    infra_keywords = ["data infrastructure", "data pipeline", "data ingestion", "data processing", "合成数据", "数据基础设施", "数据采集", "数据处理", "synthetic data"]
+    world_score = sum(1 for k in world_keywords if normalize(k) in txt)
+    infra_score = sum(1 for k in infra_keywords if normalize(k) in txt)
+    if world_score >= infra_score:
+        return "World Engine"
+    return "Data Infra"
+
+
+def build_day_summary(papers: List[Paper]) -> str:
+    total = len(papers)
+    world = sum(1 for p in papers if classify_paper(p) == "World Engine")
+    infra = total - world
+    return f"今日发布概览：共{total}篇，World Engine方向{world}篇，Data Infra方向{infra}篇。"
+
 def build_prompt(paper: Paper) -> str:
     return textwrap.dedent(
         f"""
@@ -478,6 +497,11 @@ def to_html(report_text: str) -> str:
             in_paper = True
             html_lines.append("<div style='border-left:4px solid #3b82f6;background:#f8fafc;padding:12px 14px;margin:12px 0;'>")
             html_lines.append(f"<h2 style='font-size:20px;margin:0 0 8px'>{html.escape(striped)}</h2>")
+        elif striped.startswith("分类标题："):
+            cat = striped.split("：", 1)[1]
+            html_lines.append(f"<h2 style='font-size:30px;font-weight:800;margin:18px 0 10px;color:#0f172a;letter-spacing:0.2px'>{html.escape(cat)}</h2>")
+        elif striped.startswith("今日发布概览："):
+            html_lines.append(f"<p style='margin:8px 0 14px;padding:10px 12px;border-radius:8px;background:#ecfeff;border:1px solid #a5f3fc;font-size:17px;font-weight:600'>{html.escape(striped)}</p>")
         elif striped.startswith("分隔线"):
             html_lines.append("<hr style='border:none;border-top:1px solid #ddd;margin:18px 0' />")
         elif striped.startswith("一句话核心："):
@@ -499,28 +523,47 @@ def build_daily_digest(client: OpenAI) -> Tuple[str, str]:
 
     if not papers:
         text = (
-            f"日报标题：World Engine 与 Data Infra 论文日报\n"
-            f"结果：未检索到符合条件的论文\n"
+            "日报标题：World Engine 与 Data Infra 论文日报\n"
+            "今日发布概览：今天没有检索到符合条件的论文。\n"
+            "结果：未检索到符合条件的论文\n"
             "说明：当前严格按北京时间昨天与今天筛选"
         )
         text = clean_symbols(text)
         return text, to_html(text)
 
     max_papers = int(os.environ.get("MAX_PAPERS", "12"))
+    selected = papers[:max_papers]
 
-    blocks = ["日报标题：World Engine 与 Data Infra 论文日报"]
+    world_papers = [p for p in selected if classify_paper(p) == "World Engine"]
+    infra_papers = [p for p in selected if classify_paper(p) == "Data Infra"]
 
-    for idx, paper in enumerate(papers[:max_papers], start=1):
-        published_bj = paper.published.astimezone(BEIJING_TZ).strftime("%Y-%m-%d %H:%M")
-        analysis_lines = format_analysis_text(analyze_paper(client, paper))
-        blocks.extend(
-            [
-                "分隔线",
-                f"论文{idx}：{paper.title}",
-                f"发布时间：{published_bj}（北京时间）",
-                f"链接：{paper.url}",
-            ] + analysis_lines
-        )
+    blocks = [
+        "日报标题：World Engine 与 Data Infra 论文日报",
+        build_day_summary(selected),
+    ]
+
+    def append_category(cat_title: str, cat_papers: List[Paper], start_idx: int) -> int:
+        idx = start_idx
+        if not cat_papers:
+            return idx
+        blocks.append(f"分类标题：{cat_title}")
+        for paper in cat_papers:
+            published_bj = paper.published.astimezone(BEIJING_TZ).strftime("%Y-%m-%d %H:%M")
+            analysis_lines = format_analysis_text(analyze_paper(client, paper))
+            blocks.extend(
+                [
+                    "分隔线",
+                    f"论文{idx}：{paper.title}",
+                    f"发布时间：{published_bj}（北京时间）",
+                    f"链接：{paper.url}",
+                ] + analysis_lines
+            )
+            idx += 1
+        return idx
+
+    n = 1
+    n = append_category("World Engine", world_papers, n)
+    append_category("Data Infra", infra_papers, n)
 
     text = "\n".join(blocks)
     text = clean_symbols(text)
