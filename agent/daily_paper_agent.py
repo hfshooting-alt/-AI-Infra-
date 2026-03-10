@@ -74,6 +74,13 @@ class Paper:
     authors: List[str]
 
 
+@dataclass
+class AnalyzedPaper:
+    paper: Paper
+    category: str
+    analysis_lines: List[str]
+
+
 def now_utc() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
@@ -423,31 +430,42 @@ def classify_paper(paper: Paper) -> str:
     return "Data Infra"
 
 
-def build_day_lead(papers: List[Paper]) -> str:
-    if not papers:
+def build_day_lead_from_analyses(items: List[AnalyzedPaper]) -> str:
+    if not items:
         return "今日导读：今天暂无符合条件的新论文。"
 
-    world = [pp for pp in papers if classify_paper(pp) == "World Engine"]
-    infra = [pp for pp in papers if classify_paper(pp) == "Data Infra"]
+    world_items = [it for it in items if it.category == "World Engine"]
+    infra_items = [it for it in items if it.category == "Data Infra"]
 
-    top_world = world[0].title if world else ""
-    top_infra = infra[0].title if infra else ""
+    def collect_points(rows: List[AnalyzedPaper]) -> List[str]:
+        points: List[str] = []
+        for row in rows:
+            for ln in row.analysis_lines:
+                if ln.startswith("一句话核心："):
+                    content = ln.split("：", 1)[1].strip()
+                    if content:
+                        points.append(content.rstrip("。；;,. "))
+                    break
+        return points
 
-    if world and infra:
-        return (
-            f"今日导读：今天的论文一方面聚焦世界模型与仿真能力（如《{top_world}》），"
-            f"另一方面推进数据基础设施与处理链路（如《{top_infra}》）。"
-            "整体看，研究正在从模型能力与数据工程两端同时提速。"
-        )
-    if world:
-        return (
-            f"今日导读：今天的新增论文主要集中在 World Engine 方向，"
-            f"其中《{top_world}》代表了模型与仿真能力的最新推进，值得优先阅读。"
-        )
-    return (
-        f"今日导读：今天的新增论文主要集中在 Data Infra 方向，"
-        f"其中《{top_infra}》体现了数据采集与处理链路的关键增量，值得重点关注。"
-    )
+    world_points = collect_points(world_items)
+    infra_points = collect_points(infra_items)
+
+    def join_short(points: List[str], limit: int = 3) -> str:
+        if not points:
+            return ""
+        merged = "；".join(points[:limit])
+        return merged[:220]
+
+    parts: List[str] = [
+        f"今日导读：今天共收录{len(items)}篇论文，World Engine方向{len(world_items)}篇，Data Infra方向{len(infra_items)}篇。"
+    ]
+    if world_points:
+        parts.append(f"World Engine方面，{join_short(world_points)}。")
+    if infra_points:
+        parts.append(f"Data Infra方面，{join_short(infra_points)}。")
+    parts.append("下文已按分类给出逐篇结构化精读，可直接定位到感兴趣方向继续阅读。")
+    return "".join(parts)
 
 
 def build_day_summary(papers: List[Paper]) -> str:
@@ -639,37 +657,43 @@ def build_daily_digest(client: OpenAI) -> Tuple[str, str]:
     max_papers = int(os.environ.get("MAX_PAPERS", "12"))
     selected = diversify_sources(papers, max_papers)
 
-    world_papers = [p for p in selected if classify_paper(p) == "World Engine"]
-    infra_papers = [p for p in selected if classify_paper(p) == "Data Infra"]
+    analyzed: List[AnalyzedPaper] = []
+    for paper in selected:
+        category = classify_paper(paper)
+        analysis_lines = format_analysis_text(analyze_paper(client, paper))
+        analyzed.append(AnalyzedPaper(paper=paper, category=category, analysis_lines=analysis_lines))
+
+    world_items = [x for x in analyzed if x.category == "World Engine"]
+    infra_items = [x for x in analyzed if x.category == "Data Infra"]
 
     blocks = [
         "World Engine 与 Data Infra 论文日报",
         build_day_summary(selected),
-        build_day_lead(selected),
+        build_day_lead_from_analyses(analyzed),
     ]
 
-    def append_category(cat_title: str, cat_papers: List[Paper], start_idx: int) -> int:
+    def append_category(cat_title: str, cat_items: List[AnalyzedPaper], start_idx: int) -> int:
         idx = start_idx
-        if not cat_papers:
+        if not cat_items:
             return idx
         blocks.append(f"分类标题：{cat_title}")
-        for paper in cat_papers:
+        for item in cat_items:
+            paper = item.paper
             published_bj = paper.published.astimezone(BEIJING_TZ).strftime("%Y-%m-%d %H:%M")
-            analysis_lines = format_analysis_text(analyze_paper(client, paper))
             blocks.extend(
                 [
                     "分隔线",
                     f"论文{idx}：{paper.title}",
                     f"发布时间：{published_bj}（北京时间）",
                     f"链接：{paper.url}",
-                ] + analysis_lines
+                ] + item.analysis_lines
             )
             idx += 1
         return idx
 
     n = 1
-    n = append_category("World Engine", world_papers, n)
-    append_category("Data Infra", infra_papers, n)
+    n = append_category("World Engine", world_items, n)
+    append_category("Data Infra", infra_items, n)
 
     text = "\n".join(blocks)
     text = clean_symbols(text)
