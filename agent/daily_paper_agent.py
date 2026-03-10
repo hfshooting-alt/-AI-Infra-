@@ -552,7 +552,7 @@ def format_analysis_text(text: str) -> List[str]:
 def to_html(report_text: str) -> str:
     lines = report_text.splitlines()
     html_lines = [
-        "<html><body style='font-family:Inter,Segoe UI,Arial,Helvetica,sans-serif;line-height:1.85;color:#0f172a;background:#f5f7fb;'>",
+        "<html><body style='font-family:Inter,Segoe UI,Arial,Helvetica,sans-serif;line-height:1.7;color:#0f172a;background:#f5f7fb;'>",
         "<div style='max-width:980px;margin:0 auto;padding:20px 18px;'>",
     ]
     in_paper = False
@@ -572,23 +572,23 @@ def to_html(report_text: str) -> str:
         if striped.startswith("World Engine 与 Data Infra 论文日报"):
             close_paper_card()
             html_lines.append(
-                f"<h1 style='font-size:34px;font-weight:850;line-height:1.25;margin:6px 0 14px;color:#0b132b'>{html.escape(striped)}</h1>"
+                f"<h1 style='font-size:38px;font-weight:850;line-height:1.25;margin:6px 0 14px;color:#0b132b'>{html.escape(striped)}</h1>"
             )
         elif striped.startswith("今日发布概览："):
             close_paper_card()
             html_lines.append(
-                f"<p style='margin:8px 0 12px;padding:12px 14px;border-radius:10px;background:#ecfeff;border:1px solid #a5f3fc;font-size:17px;font-weight:600;line-height:1.7'>{html.escape(striped)}</p>"
+                f"<p style='margin:8px 0 12px;padding:12px 14px;border-radius:10px;background:#ecfeff;border:1px solid #a5f3fc;font-size:16px;font-weight:600;line-height:1.7'>{html.escape(striped)}</p>"
             )
         elif striped.startswith("今日导读："):
             close_paper_card()
             html_lines.append(
-                f"<p style='margin:0 0 18px;padding:12px 14px;border-radius:10px;background:#fefce8;border:1px solid #fde68a;font-size:17px;font-weight:500;line-height:1.8'>{html.escape(striped)}</p>"
+                f"<p style='margin:0 0 18px;padding:12px 14px;border-radius:10px;background:#fefce8;border:1px solid #fde68a;font-size:16px;font-weight:500;line-height:1.8'>{html.escape(striped)}</p>"
             )
         elif striped.startswith("分类标题："):
             close_paper_card()
             cat = striped.split("：", 1)[1]
             html_lines.append(
-                f"<h2 style='font-size:40px;font-weight:900;line-height:1.2;margin:24px 0 12px;color:#0b132b;letter-spacing:0.1px'>{html.escape(cat)}</h2>"
+                f"<h2 style='font-size:34px;font-weight:850;line-height:1.25;margin:24px 0 12px;color:#0b132b;letter-spacing:0.1px'>{html.escape(cat)}</h2>"
             )
             html_lines.append("<hr style='border:none;border-top:1px solid #d7deea;margin:0 0 16px 0' />")
         elif re.match(r"^论文\d+：", striped):
@@ -598,25 +598,25 @@ def to_html(report_text: str) -> str:
                 "<div style='border-left:4px solid #3b82f6;background:#ffffff;padding:16px 16px 14px;margin:14px 0 18px;border-radius:10px;box-shadow:0 1px 2px rgba(15,23,42,0.06);'>"
             )
             html_lines.append(
-                f"<h3 style='font-size:40px;font-weight:800;line-height:1.3;margin:0 0 10px;color:#1f2937'>{html.escape(striped)}</h3>"
+                f"<h3 style='font-size:24px;font-weight:800;line-height:1.35;margin:0 0 10px;color:#1f2937'>{html.escape(striped)}</h3>"
             )
         elif striped.startswith("分隔线"):
             close_paper_card()
             html_lines.append("<hr style='border:none;border-top:1px solid #d7deea;margin:18px 0' />")
         elif striped.startswith("一句话核心："):
             html_lines.append(
-                f"<p style='margin:10px 0 14px;padding:10px 12px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;font-size:28px;font-weight:700;line-height:1.75'>{html.escape(striped)}</p>"
+                f"<p style='margin:10px 0 14px;padding:10px 12px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;font-size:19px;font-weight:700;line-height:1.75'>{html.escape(striped)}</p>"
             )
         elif striped.startswith("背景与现状：") or striped.startswith("方法与结果：") or striped.startswith("意义与局限："):
             title, content = striped.split("：", 1)
             html_lines.append(
-                f"<p style='margin:14px 0 6px;font-size:30px;font-weight:800;line-height:1.35;color:#0f172a'>{html.escape(title)}</p>"
+                f"<p style='margin:14px 0 6px;font-size:20px;font-weight:800;line-height:1.35;color:#0f172a'>{html.escape(title)}</p>"
             )
             html_lines.append(
-                f"<p style='margin:0 0 10px;font-size:25px;line-height:1.95;color:#1f2937'>{html.escape(content)}</p>"
+                f"<p style='margin:0 0 10px;font-size:17px;line-height:1.9;color:#1f2937'>{html.escape(content)}</p>"
             )
         else:
-            html_lines.append(f"<p style='margin:8px 0;font-size:24px;line-height:1.9'>{html.escape(striped)}</p>")
+            html_lines.append(f"<p style='margin:8px 0;font-size:17px;line-height:1.85'>{html.escape(striped)}</p>")
 
     close_paper_card()
     html_lines.append("</div></body></html>")
