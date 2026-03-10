@@ -606,32 +606,35 @@ def fetch_fulltext_context(paper: Paper) -> str:
         resp.raise_for_status()
         txt = html_strip(resp.text)
         txt = re.sub(r"\s+", " ", txt).strip()
-        return txt[:12000]
+        return txt[:20000]
     except Exception:
         return ""
+
+
+def has_readable_fulltext(fulltext_context: str) -> bool:
+    # protect against abstract-only snippets / nav noise
+    return len(fulltext_context.strip()) >= 2500
 
 
 def build_prompt(paper: Paper, category: str, fulltext_context: str) -> str:
     return textwrap.dedent(
         f"""
-        你是论文信息整理 Agent。请优先依据论文全文内容进行拆解；若全文抓取失败，再退回标题+摘要。
+        你是论文原文信息整理 Agent。你必须先通读提供的正文内容，再输出。
+        只允许写“论文标题、摘要、正文”明确出现的信息，不得补充推断，不得主观延伸。
 
-        严格输出以下六行，不要输出其它字段：
-        一句话核心：<一句话讲清楚论文做了什么、解决什么、结果如何；尽量完整>
-        论文背景：<2-3句，说明当前做法的主要局限>
-        论文创新点：<1-2句，直接说这篇论文新增了什么>
-        论文方法拆解：<2-3句，按步骤讲方法，少术语堆砌>
-        论文结果拆解：<2-3句；若无量化信息写“未披露具体幅度”>
-        论文展望与局限：<2-3句，仅写文本明确出现的信息>
+        严格输出以下四行，不要输出其它字段：
+        一句话核心：<一句话完整说明论文做了什么、解决什么问题、得到什么结果；仅基于原文>
+        论文背景：<2-3句，包含背景与创新点，只写原文可证实内容>
+        方法与结果：<2-3句，只写原文方法步骤和结果；若无量化写“原文未披露具体幅度”>
+        局限与展望：<2-3句，只写作者明确提到的限制与未来方向>
 
-        要求：
-        只写标题、摘要、正文明确支持的信息，不做额外推断。
-        用短句。让非专业读者也能看懂。避免术语堆砌和语病。
+        语言要求：
+        用短句、少术语、易读。避免堆砌和语病。
 
         论文分类：{category}
         标题：{paper.title}
         摘要：{paper.abstract[:7000]}
-        全文内容（若抓取成功）：{fulltext_context[:12000] if fulltext_context else '未获取到全文正文'}
+        正文：{fulltext_context[:18000]}
         """
     ).strip()
 
@@ -660,10 +663,8 @@ def parse_structured_analysis(text: str) -> Dict[str, str]:
     keys = [
         "一句话核心",
         "论文背景",
-        "论文创新点",
-        "论文方法拆解",
-        "论文结果拆解",
-        "论文展望与局限",
+        "方法与结果",
+        "局限与展望",
     ]
     data: Dict[str, str] = {k: "未披露" for k in keys}
     for line in clean_symbols(text).splitlines():
@@ -675,16 +676,14 @@ def parse_structured_analysis(text: str) -> Dict[str, str]:
         if k in data and v.strip():
             data[k] = v.strip()
 
-    if data["论文结果拆解"].strip() in ["未披露", "摘要未披露", "未知", "不详"]:
-        data["论文结果拆解"] = "文本未披露具体幅度。"
+    if data["方法与结果"].strip() in ["未披露", "摘要未披露", "未知", "不详"]:
+        data["方法与结果"] = "原文未披露具体幅度。"
 
     max_len = {
-        "一句话核心": 88,
-        "论文背景": 150,
-        "论文创新点": 100,
-        "论文方法拆解": 150,
-        "论文结果拆解": 150,
-        "论文展望与局限": 140,
+        "一句话核心": 96,
+        "论文背景": 220,
+        "方法与结果": 220,
+        "局限与展望": 200,
     }
     for k, m in max_len.items():
         if len(data[k]) > m:
@@ -709,11 +708,9 @@ def render_paper_block(index: int, item: AnalyzedPaper, parsed: Dict[str, str]) 
         f"发布时间：{published_bj}（北京时间）",
         f"链接：{paper.url}",
         f"一句话核心：{parsed['一句话核心']}",
-        f"论文背景：{parsed['论文背景']}",
-        f"论文创新点：{parsed['论文创新点']}",
-        f"论文方法拆解：{parsed['论文方法拆解']}",
-        f"论文结果拆解：{parsed['论文结果拆解']}",
-        f"论文展望与局限：{parsed['论文展望与局限']}",
+        f"论文背景：背景&创新点：{parsed['论文背景']}",
+        f"方法与结果：{parsed['方法与结果']}",
+        f"局限与展望：{parsed['局限与展望']}",
     ]
 
 
@@ -809,7 +806,7 @@ def to_html(report_text: str) -> str:
             html_lines.append(
                 f"<p style='margin:10px 0 14px;padding:10px 12px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;font-size:19px;font-weight:700;line-height:1.75'>{html.escape(striped)}</p>"
             )
-        elif striped.startswith("论文背景：") or striped.startswith("论文创新点：") or striped.startswith("论文方法拆解：") or striped.startswith("论文结果拆解：") or striped.startswith("论文展望与局限："):
+        elif striped.startswith("论文背景：") or striped.startswith("方法与结果：") or striped.startswith("局限与展望："):
             title, content = striped.split("：", 1)
             html_lines.append(
                 f"<p style='margin:14px 0 6px;font-size:20px;font-weight:800;line-height:1.35;color:#0f172a'>{html.escape(title)}</p>"
@@ -847,13 +844,30 @@ def build_daily_digest(client: OpenAI) -> Tuple[str, str]:
 
     analyzed: List[AnalyzedPaper] = []
     parsed_map: Dict[str, Dict[str, str]] = {}
+    skipped_no_fulltext = 0
     for paper in selected:
         category = classify_paper(paper)
         fulltext_context = fetch_fulltext_context(paper)
+        if not has_readable_fulltext(fulltext_context):
+            skipped_no_fulltext += 1
+            continue
         raw = analyze_paper(client, paper, category, fulltext_context)
         parsed = parse_structured_analysis(raw)
         analyzed.append(AnalyzedPaper(paper=paper, category=category, analysis_lines=[]))
         parsed_map[paper.title] = parsed
+
+    if not analyzed:
+        text = (
+            "World Engine 与 Data Infra 论文日报\n"
+            "今日总篇数：0\n"
+            "各方向篇数：World Engine 0；Data Infra 0\n"
+            "今日最值得读 Top 3：无\n"
+            "当日趋势：无\n"
+            f"总体判断：候选论文正文抓取不足（跳过{skipped_no_fulltext}篇），未生成正文级解读。"
+        )
+        cleaned = clean_symbols(text)
+        return cleaned, to_html(cleaned)
+
 
     world_items = [x for x in analyzed if x.category == "World Engine"]
     infra_items = [x for x in analyzed if x.category == "Data Infra"]
