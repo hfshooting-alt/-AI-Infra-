@@ -598,41 +598,49 @@ def build_day_summary(papers: List[Paper]) -> str:
     return f"今日总篇数：{total}；World Engine：{world}；Data Infra：{infra}"
 
 
-def build_prompt(paper: Paper, category: str) -> str:
-    source_level = "标题+摘要" if paper.abstract else "仅标题"
+
+
+def fetch_fulltext_context(paper: Paper) -> str:
+    try:
+        resp = requests.get(paper.url, timeout=20, headers=REQUEST_HEADERS)
+        resp.raise_for_status()
+        txt = html_strip(resp.text)
+        txt = re.sub(r"\s+", " ", txt).strip()
+        return txt[:12000]
+    except Exception:
+        return ""
+
+
+def build_prompt(paper: Paper, category: str, fulltext_context: str) -> str:
     return textwrap.dedent(
         f"""
-        你是论文信息整理 Agent。必须只写被标题/摘要明确支持的信息，不做额外推断。
+        你是论文信息整理 Agent。请优先依据论文全文内容进行拆解；若全文抓取失败，再退回标题+摘要。
 
-        严格输出以下字段，每行一个字段，字段名不可改：
-        关键词：<3-5个，逗号分隔>
-        纳入理由：<为什么属于 {category}，只基于标题/摘要>
-        作者声称：<1句，明确标注“作者声称：...”>
-        Agent归纳：<1句，明确标注“Agent归纳：...”，仅弱归纳，不下强结论>
-        一句话核心：<1句>
-        为什么值得看：<1-2句>
-        论文明确方法：<2句>
-        论文明确结果：<2句；若无量化信息写“摘要未披露具体幅度”>
-        局限/缺口：<仅写信息不足或作者未覆盖部分>
+        严格输出以下四行，不要输出其它字段：
+        一句话核心：<一句话讲清楚论文做了什么、解决什么、达到什么结果>
+        论文背景（当前技术局限和论文创新点）：<2-3句>
+        论文方法与结果：<2-3句；如无量化信息写“未披露具体幅度”>
+        论文的展望与局限：<2-3句；仅写作者提到或文本明确可见内容>
 
-        约束：
-        - 若信息不足，直接写“摘要未披露”。
-        - 不允许出现审稿口吻或主观批评。
-        - 当前信息来源层级为：{source_level}。
+        要求：
+        只写标题、摘要、正文明确支持的信息，不做额外推断。
+        句子简洁，硬信息优先。
 
+        论文分类：{category}
         标题：{paper.title}
         摘要：{paper.abstract[:7000]}
+        全文内容（若抓取成功）：{fulltext_context[:12000] if fulltext_context else '未获取到全文正文'}
         """
     ).strip()
 
 
-def analyze_paper(client: OpenAI, paper: Paper, category: str) -> str:
+def analyze_paper(client: OpenAI, paper: Paper, category: str, fulltext_context: str) -> str:
     completion = client.chat.completions.create(
         model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
         temperature=0.1,
         messages=[
             {"role": "system", "content": "你是严谨的信息抽取助手。"},
-            {"role": "user", "content": build_prompt(paper, category)},
+            {"role": "user", "content": build_prompt(paper, category, fulltext_context)},
         ],
     )
     return (completion.choices[0].message.content or "").strip()
@@ -648,10 +656,12 @@ def clean_symbols(text: str) -> str:
 
 def parse_structured_analysis(text: str) -> Dict[str, str]:
     keys = [
-        "关键词", "纳入理由", "作者声称", "Agent归纳", "一句话核心", "为什么值得看",
-        "论文明确方法", "论文明确结果", "局限/缺口",
+        "一句话核心",
+        "论文背景（当前技术局限和论文创新点）",
+        "论文方法与结果",
+        "论文的展望与局限",
     ]
-    data: Dict[str, str] = {k: "摘要未披露" for k in keys}
+    data: Dict[str, str] = {k: "未披露" for k in keys}
     for line in clean_symbols(text).splitlines():
         s = line.strip()
         if "：" not in s:
@@ -661,14 +671,14 @@ def parse_structured_analysis(text: str) -> Dict[str, str]:
         if k in data and v.strip():
             data[k] = v.strip()
 
-    if "具体幅度" not in data["论文明确结果"] and any(x in data["论文明确结果"] for x in ["未披露", "未知", "不详"]):
-        data["论文明确结果"] = "摘要未披露具体幅度。"
+    if data["论文方法与结果"].strip() in ["未披露", "摘要未披露", "未知", "不详"]:
+        data["论文方法与结果"] = "文本未披露具体幅度。"
 
-    # compact lengths for 250-350 chars target
     max_len = {
-        "关键词": 40, "纳入理由": 44, "作者声称": 44, "Agent归纳": 44,
-        "一句话核心": 42, "为什么值得看": 46, "论文明确方法": 64,
-        "论文明确结果": 64, "局限/缺口": 44,
+        "一句话核心": 72,
+        "论文背景（当前技术局限和论文创新点）": 120,
+        "论文方法与结果": 120,
+        "论文的展望与局限": 120,
     }
     for k, m in max_len.items():
         if len(data[k]) > m:
@@ -686,26 +696,16 @@ def confidence_level(paper: Paper) -> str:
 
 def render_paper_block(index: int, item: AnalyzedPaper, parsed: Dict[str, str]) -> List[str]:
     paper = item.paper
-    source_level = "标题+摘要" if paper.abstract else "仅标题"
     published_bj = paper.published.astimezone(BEIJING_TZ).strftime("%Y-%m-%d %H:%M")
     return [
         "分隔线",
         f"论文{index}：{paper.title}",
         f"发布时间：{published_bj}（北京时间）",
         f"链接：{paper.url}",
-        f"论文类型：{infer_paper_type(paper)}",
-        f"关键词：{parsed['关键词']}",
-        f"纳入理由：{parsed['纳入理由']}",
         f"一句话核心：{parsed['一句话核心']}",
-        f"为什么值得看：{parsed['为什么值得看']}",
-        f"作者声称：{parsed['作者声称'].replace('作者声称：', '').strip()}",
-        f"Agent归纳：{parsed['Agent归纳'].replace('Agent归纳：', '').strip()}",
-        f"论文明确方法：{parsed['论文明确方法']}",
-        f"论文明确结果：{parsed['论文明确结果']}",
-        f"局限/缺口：{parsed['局限/缺口']}",
-        f"信息来源层级：{source_level}",
-        f"结论可信度：{confidence_level(paper)}",
-        f"与产业接口：{infer_industry_interface(paper)}",
+        f"论文背景（当前技术局限和论文创新点）：{parsed['论文背景（当前技术局限和论文创新点）']}",
+        f"论文方法与结果：{parsed['论文方法与结果']}",
+        f"论文的展望与局限：{parsed['论文的展望与局限']}",
     ]
 
 
@@ -801,7 +801,7 @@ def to_html(report_text: str) -> str:
             html_lines.append(
                 f"<p style='margin:10px 0 14px;padding:10px 12px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;font-size:19px;font-weight:700;line-height:1.75'>{html.escape(striped)}</p>"
             )
-        elif striped.startswith("背景与现状：") or striped.startswith("方法与结果：") or striped.startswith("意义与局限："):
+        elif striped.startswith("论文背景（当前技术局限和论文创新点）：") or striped.startswith("论文方法与结果：") or striped.startswith("论文的展望与局限："):
             title, content = striped.split("：", 1)
             html_lines.append(
                 f"<p style='margin:14px 0 6px;font-size:20px;font-weight:800;line-height:1.35;color:#0f172a'>{html.escape(title)}</p>"
@@ -841,7 +841,8 @@ def build_daily_digest(client: OpenAI) -> Tuple[str, str]:
     parsed_map: Dict[str, Dict[str, str]] = {}
     for paper in selected:
         category = classify_paper(paper)
-        raw = analyze_paper(client, paper, category)
+        fulltext_context = fetch_fulltext_context(paper)
+        raw = analyze_paper(client, paper, category, fulltext_context)
         parsed = parse_structured_analysis(raw)
         analyzed.append(AnalyzedPaper(paper=paper, category=category, analysis_lines=[]))
         parsed_map[paper.title] = parsed
