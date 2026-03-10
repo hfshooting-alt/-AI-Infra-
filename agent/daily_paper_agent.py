@@ -70,6 +70,20 @@ IRRELEVANT_HINT_KEYWORDS = [
     "astronomy", "orbit", "航天", "医学", "肿瘤", "临床", "蛋白", "细胞",
 ]
 
+INVESTMENT_TECH_KEYWORDS = [
+    "model", "engine", "simulator", "training", "inference", "benchmark", "algorithm",
+    "system", "framework", "platform", "pipeline", "infrastructure", "scalable",
+    "latency", "throughput", "reliability", "dataset", "evaluation", "deployment",
+    "architecture", "distributed", "stream", "batch", "etl", "lakehouse",
+    "模型", "引擎", "仿真", "训练", "推理", "系统", "框架", "平台", "管道", "基础设施",
+]
+
+EXCLUDED_NON_TECH_KEYWORDS = [
+    "art", "artist", "mural", "museum", "heritage", "aesthetics", "culture", "curation",
+    "filipino", "humanities", "literature", "music", "dance", "painting", "exhibition",
+    "艺术", "壁画", "博物馆", "文化", "文学", "音乐", "舞蹈", "展览", "美学",
+]
+
 RSS_SOURCES = {
     "Nature": "https://www.nature.com/nature.rss",
     "Science": "https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=science",
@@ -92,6 +106,8 @@ class Paper:
     source: str
     published: dt.datetime
     authors: List[str]
+    citation_count: int = 0
+    influence_score: float = 0.0
 
 
 @dataclass
@@ -182,18 +198,27 @@ def topical_score(title: str, abstract: str) -> int:
     base = sum(1 for kw in TOPIC_KEYWORDS if normalize(kw) in hay)
     world_hit = sum(1 for kw in WORLD_STRICT_KEYWORDS if normalize(kw) in hay)
     infra_hit = sum(1 for kw in INFRA_STRICT_KEYWORDS if normalize(kw) in hay)
+    tech_hit = sum(1 for kw in INVESTMENT_TECH_KEYWORDS if normalize(kw) in hay)
     penalty = sum(1 for kw in IRRELEVANT_HINT_KEYWORDS if normalize(kw) in hay)
-    return base + world_hit * 2 + infra_hit * 2 - penalty * 3
+    exclude = sum(1 for kw in EXCLUDED_NON_TECH_KEYWORDS if normalize(kw) in hay)
+    return base + world_hit * 3 + infra_hit * 3 + tech_hit - penalty * 3 - exclude * 4
 
 
 def is_domain_relevant(title: str, abstract: str) -> bool:
     hay = normalize(f"{title} {abstract}")
-    world_hit = any(normalize(kw) in hay for kw in WORLD_STRICT_KEYWORDS)
-    infra_hit = any(normalize(kw) in hay for kw in INFRA_STRICT_KEYWORDS)
-    if not (world_hit or infra_hit):
-        return False
+    world_hit = sum(1 for kw in WORLD_STRICT_KEYWORDS if normalize(kw) in hay)
+    infra_hit = sum(1 for kw in INFRA_STRICT_KEYWORDS if normalize(kw) in hay)
+    tech_hit = sum(1 for kw in INVESTMENT_TECH_KEYWORDS if normalize(kw) in hay)
+    excluded = any(normalize(kw) in hay for kw in EXCLUDED_NON_TECH_KEYWORDS)
     penalty = sum(1 for kw in IRRELEVANT_HINT_KEYWORDS if normalize(kw) in hay)
-    return penalty <= 1 or (world_hit and infra_hit)
+
+    if excluded:
+        return False
+    if penalty >= 2:
+        return False
+    if world_hit + infra_hit < 1:
+        return False
+    return (world_hit + infra_hit + tech_hit) >= 2
 
 
 def fetch_arxiv() -> List[Paper]:
@@ -216,6 +241,8 @@ def fetch_arxiv() -> List[Paper]:
                 source="arXiv",
                 published=published,
                 authors=[a.name for a in e.get("authors", [])],
+                citation_count=0,
+                influence_score=0.0,
             )
         )
     return papers
@@ -232,7 +259,7 @@ def fetch_crossref() -> List[Paper]:
             "rows": 30,
             "sort": "published",
             "order": "desc",
-            "select": "title,URL,abstract,container-title,author,published-online,published-print,issued",
+            "select": "title,URL,abstract,container-title,author,published-online,published-print,issued,is-referenced-by-count",
         }
         resp = requests.get("https://api.crossref.org/works", params=params, timeout=30, headers=REQUEST_HEADERS)
         resp.raise_for_status()
@@ -259,6 +286,8 @@ def fetch_crossref() -> List[Paper]:
                     source=f"Crossref/{venue}",
                     published=published,
                     authors=authors,
+                    citation_count=int(item.get("is-referenced-by-count") or 0),
+                    influence_score=0.0,
                 )
             )
     return papers
@@ -309,6 +338,8 @@ def fetch_openalex() -> List[Paper]:
                     source="OpenAlex",
                     published=published,
                     authors=authors,
+                    citation_count=int(r.get("cited_by_count") or 0),
+                    influence_score=float(r.get("cited_by_count") or 0) / 50.0,
                 )
             )
     return papers
@@ -325,7 +356,7 @@ def fetch_semantic_scholar() -> List[Paper]:
             "query": term,
             "limit": 25,
             "offset": 0,
-            "fields": "title,abstract,url,authors,publicationDate,publicationVenue",
+            "fields": "title,abstract,url,authors,publicationDate,publicationVenue,citationCount,influentialCitationCount",
             "year": str(now_beijing().year),
         }
         resp = requests.get(base, params=params, timeout=30, headers=REQUEST_HEADERS)
@@ -347,6 +378,8 @@ def fetch_semantic_scholar() -> List[Paper]:
                     source=f"SemanticScholar/{venue}",
                     published=published,
                     authors=[a.get("name", "") for a in p.get("authors", []) if a.get("name")],
+                    citation_count=int(p.get("citationCount") or 0),
+                    influence_score=float(p.get("influentialCitationCount") or 0),
                 )
             )
     return papers
@@ -381,6 +414,8 @@ def fetch_rss_journals() -> List[Paper]:
                     source=f"RSS/{source_name}",
                     published=published,
                     authors=authors,
+                    citation_count=0,
+                    influence_score=0.0,
                 )
             )
     return papers
@@ -396,15 +431,28 @@ def dedup_rank(papers: Iterable[Paper]) -> List[Paper]:
         if not prev:
             dedup[key] = p
             continue
-        if (topical_score(p.title, p.abstract), p.published) > (
+        if (topical_score(p.title, p.abstract), impact_score(p), p.published) > (
             topical_score(prev.title, prev.abstract),
+            impact_score(prev),
             prev.published,
         ):
             dedup[key] = p
 
     filtered = [p for p in dedup.values() if is_domain_relevant(p.title, p.abstract)]
-    filtered.sort(key=lambda x: (topical_score(x.title, x.abstract), x.published), reverse=True)
+    filtered.sort(key=lambda x: (topical_score(x.title, x.abstract), impact_score(x), x.published), reverse=True)
     return filtered
+
+
+
+
+def impact_score(p: Paper) -> float:
+    # log-like scaling without math import for stability
+    c = max(p.citation_count, 0)
+    citation_term = 0.0
+    while c > 0:
+        citation_term += 1.0
+        c //= 10
+    return citation_term * 2.5 + max(p.influence_score, 0.0)
 
 
 def diversify_sources(papers: List[Paper], limit: int) -> List[Paper]:
@@ -417,7 +465,7 @@ def diversify_sources(papers: List[Paper], limit: int) -> List[Paper]:
 
     ordered_sources = sorted(by_source.keys(), key=lambda s: len(by_source[s]), reverse=True)
     for s in ordered_sources:
-        by_source[s].sort(key=lambda x: (topical_score(x.title, x.abstract), x.published), reverse=True)
+        by_source[s].sort(key=lambda x: (topical_score(x.title, x.abstract), impact_score(x), x.published), reverse=True)
 
     out: List[Paper] = []
     while len(out) < limit:
@@ -699,11 +747,7 @@ def build_daily_digest(client: OpenAI) -> Tuple[str, str]:
         text = clean_symbols(text)
         return text, to_html(text)
 
-    max_papers_raw = os.environ.get("MAX_PAPERS", "").strip()
-    if max_papers_raw:
-        selected = diversify_sources(papers, int(max_papers_raw))
-    else:
-        selected = papers
+    selected = diversify_sources(papers, int(os.environ.get("MAX_PAPERS", "10")))
 
     analyzed: List[AnalyzedPaper] = []
     for paper in selected:
