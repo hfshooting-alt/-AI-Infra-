@@ -378,6 +378,33 @@ def classify_paper(paper: Paper) -> str:
     return "Data Infra"
 
 
+def build_day_lead(papers: List[Paper]) -> str:
+    if not papers:
+        return "今日导读：今天暂无符合条件的新论文。"
+
+    world = [pp for pp in papers if classify_paper(pp) == "World Engine"]
+    infra = [pp for pp in papers if classify_paper(pp) == "Data Infra"]
+
+    top_world = world[0].title if world else ""
+    top_infra = infra[0].title if infra else ""
+
+    if world and infra:
+        return (
+            f"今日导读：今天的论文一方面聚焦世界模型与仿真能力（如《{top_world}》），"
+            f"另一方面推进数据基础设施与处理链路（如《{top_infra}》）。"
+            "整体看，研究正在从模型能力与数据工程两端同时提速。"
+        )
+    if world:
+        return (
+            f"今日导读：今天的新增论文主要集中在 World Engine 方向，"
+            f"其中《{top_world}》代表了模型与仿真能力的最新推进，值得优先阅读。"
+        )
+    return (
+        f"今日导读：今天的新增论文主要集中在 Data Infra 方向，"
+        f"其中《{top_infra}》体现了数据采集与处理链路的关键增量，值得重点关注。"
+    )
+
+
 def build_day_summary(papers: List[Paper]) -> str:
     total = len(papers)
     world = sum(1 for p in papers if classify_paper(p) == "World Engine")
@@ -497,7 +524,7 @@ def to_html(report_text: str) -> str:
             html_lines.append("<div style='height:12px'></div>")
             continue
 
-        if striped.startswith("日报标题"):
+        if striped.startswith("World Engine 与 Data Infra 论文日报"):
             close_paper_card()
             html_lines.append(
                 f"<h1 style='font-size:34px;font-weight:850;line-height:1.25;margin:6px 0 14px;color:#0b132b'>{html.escape(striped)}</h1>"
@@ -505,7 +532,12 @@ def to_html(report_text: str) -> str:
         elif striped.startswith("今日发布概览："):
             close_paper_card()
             html_lines.append(
-                f"<p style='margin:8px 0 18px;padding:12px 14px;border-radius:10px;background:#ecfeff;border:1px solid #a5f3fc;font-size:17px;font-weight:600;line-height:1.7'>{html.escape(striped)}</p>"
+                f"<p style='margin:8px 0 12px;padding:12px 14px;border-radius:10px;background:#ecfeff;border:1px solid #a5f3fc;font-size:17px;font-weight:600;line-height:1.7'>{html.escape(striped)}</p>"
+            )
+        elif striped.startswith("今日导读："):
+            close_paper_card()
+            html_lines.append(
+                f"<p style='margin:0 0 18px;padding:12px 14px;border-radius:10px;background:#fefce8;border:1px solid #fde68a;font-size:17px;font-weight:500;line-height:1.8'>{html.escape(striped)}</p>"
             )
         elif striped.startswith("分类标题："):
             close_paper_card()
@@ -551,7 +583,7 @@ def build_daily_digest(client: OpenAI) -> Tuple[str, str]:
 
     if not papers:
         text = (
-            "日报标题：World Engine 与 Data Infra 论文日报\n"
+            "World Engine 与 Data Infra 论文日报\n"
             "今日发布概览：今天没有检索到符合条件的论文。\n"
             "结果：未检索到符合条件的论文\n"
             "说明：当前严格按北京时间昨天与今天筛选"
@@ -566,8 +598,9 @@ def build_daily_digest(client: OpenAI) -> Tuple[str, str]:
     infra_papers = [p for p in selected if classify_paper(p) == "Data Infra"]
 
     blocks = [
-        "日报标题：World Engine 与 Data Infra 论文日报",
+        "World Engine 与 Data Infra 论文日报",
         build_day_summary(selected),
+        build_day_lead(selected),
     ]
 
     def append_category(cat_title: str, cat_papers: List[Paper], start_idx: int) -> int:
