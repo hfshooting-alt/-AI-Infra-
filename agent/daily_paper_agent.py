@@ -540,96 +540,104 @@ def classify_paper(paper: Paper) -> str:
     return "World Engine"
 
 
-def build_day_lead_from_analyses(items: List[AnalyzedPaper]) -> str:
-    if not items:
-        return "今日导读：今天暂无符合条件的新论文。"
+def infer_paper_type(paper: Paper) -> str:
+    src = paper.source.lower()
+    if "arxiv" in src or "biorxiv" in src or "medrxiv" in src:
+        return "预印本"
+    if "crossref" in src or "rss" in src or "openalex" in src or "semanticscholar" in src:
+        return "期刊/索引收录论文"
+    return "论文"
 
-    world_items = [it for it in items if it.category == "World Engine"]
-    infra_items = [it for it in items if it.category == "Data Infra"]
 
-    def count_matches(rows: List[AnalyzedPaper], keywords: List[str]) -> int:
-        c = 0
-        for row in rows:
-            hay = normalize(f"{row.paper.title} {row.paper.abstract} {' '.join(row.analysis_lines)}")
-            if any(normalize(k) in hay for k in keywords):
-                c += 1
-        return c
+def infer_industry_interface(paper: Paper) -> str:
+    txt = normalize(f"{paper.title} {paper.abstract}")
+    tags: List[str] = []
+    if any(k in txt for k in ["train", "training", "policy", "训练", "学习"]):
+        tags.append("训练")
+    if any(k in txt for k in ["evaluate", "benchmark", "评测", "evaluation"]):
+        tags.append("评测")
+    if any(k in txt for k in ["simulat", "digital twin", "仿真", "world model", "world simulator"]):
+        tags.append("仿真")
+    if any(k in txt for k in ["deploy", "serving", "latency", "inference", "部署", "推理"]):
+        tags.append("部署")
+    if any(k in txt for k in ["pipeline", "etl", "ingestion", "lakehouse", "feature store", "数据管道", "湖仓"]):
+        tags.append("数据管道")
+    if not tags:
+        tags = ["评测"]
+    return " / ".join(dict.fromkeys(tags))
 
-    world_sim = count_matches(world_items, ["simulator", "simulation", "仿真", "digital twin", "interactive world"])
-    world_agent = count_matches(world_items, ["robot", "policy", "agent", "embodied", "规划", "控制"])
-    infra_pipeline = count_matches(infra_items, ["pipeline", "ingestion", "etl", "orchestration", "stream", "batch", "数据管道", "采集", "流处理"])
-    infra_quality = count_matches(infra_items, ["quality", "lineage", "lakehouse", "knowledge graph", "synthetic", "数据质量", "湖仓", "知识图谱", "合成数据"])
 
-    parts: List[str] = [
-        f"今日导读：今天共收录{len(items)}篇高相关论文，World Engine方向{len(world_items)}篇，Data Infra方向{len(infra_items)}篇。"
-    ]
+def relevance_components(paper: Paper) -> Tuple[float, float, float]:
+    txt = normalize(f"{paper.title} {paper.abstract}")
+    relevance = float(max(topical_score(paper.title, paper.abstract), 1))
 
-    trend_bits: List[str] = []
-    if world_items:
-        seg = "World Engine 方向主要围绕"
-        seg += "交互式仿真与世界建模" if world_sim else "世界模型能力优化"
-        if world_agent:
-            seg += "，并与智能体训练或策略执行结合"
-        trend_bits.append(seg)
+    method_cues = ["method", "approach", "framework", "architecture", "算法", "方法", "框架"]
+    result_cues = ["result", "improv", "benchmark", "实验", "结果", "提升", "accuracy"]
+    info_increment = 1.0
+    if paper.abstract:
+        info_increment += min(len(paper.abstract) / 1200.0, 1.5)
+    info_increment += 0.4 * sum(1 for k in method_cues if normalize(k) in txt)
+    info_increment += 0.4 * sum(1 for k in result_cues if normalize(k) in txt)
 
-    if infra_items:
-        seg = "Data Infra 方向集中在"
-        if infra_pipeline and infra_quality:
-            seg += "数据采集/处理链路与数据质量治理的协同优化"
-        elif infra_pipeline:
-            seg += "数据采集、管道编排与处理效率"
-        else:
-            seg += "数据资产组织、质量与可复用性"
-        trend_bits.append(seg)
+    industry_value = 1.0
+    interface = infer_industry_interface(paper)
+    industry_value += 0.5 * interface.count("/")
+    industry_value += min(impact_score(paper) / 8.0, 2.0)
+    return relevance, info_increment, industry_value
 
-    if trend_bits:
-        parts.append("总体趋势上，" + "；".join(trend_bits) + "。")
 
-    parts.append("整体来看，研究重心更加偏向可落地的系统能力提升，而非单点实验现象。")
-    return "".join(parts)
+def ranking_score(paper: Paper) -> float:
+    r, i, v = relevance_components(paper)
+    return r * i * v
 
 
 def build_day_summary(papers: List[Paper]) -> str:
     total = len(papers)
     world = sum(1 for p in papers if classify_paper(p) == "World Engine")
     infra = total - world
-    return f"今日发布概览：共{total}篇，World Engine方向{world}篇，Data Infra方向{infra}篇。"
+    return f"今日总篇数：{total}；World Engine：{world}；Data Infra：{infra}"
 
-def build_prompt(paper: Paper) -> str:
+
+def build_prompt(paper: Paper, category: str) -> str:
+    source_level = "标题+摘要" if paper.abstract else "仅标题"
     return textwrap.dedent(
         f"""
-        你是论文深读器（增量导向）。
+        你是论文信息整理 Agent。必须只写被标题/摘要明确支持的信息，不做额外推断。
 
-        请严格按下面四行模板输出，不要添加其它栏目：
-        一句话核心：<一句话，点出论文最关键贡献>
-        背景与现状：<当前技术现状、痛点、论文填补的缺口>
-        方法与结果：<论文方法要点、关键实验结果、是否站得住>
-        意义与局限：<这项工作的意义、可迁移价值、主要局限>
+        严格输出以下字段，每行一个字段，字段名不可改：
+        关键词：<3-5个，逗号分隔>
+        纳入理由：<为什么属于 {category}，只基于标题/摘要>
+        作者声称：<1句，明确标注“作者声称：...”>
+        Agent归纳：<1句，明确标注“Agent归纳：...”，仅弱归纳，不下强结论>
+        一句话核心：<1句>
+        为什么值得看：<1-2句>
+        论文明确方法：<2句>
+        论文明确结果：<2句；若无量化信息写“摘要未披露具体幅度”>
+        局限/缺口：<仅写信息不足或作者未覆盖部分>
 
-        输出要求：
-        只输出以上四行。
-        不要输出“45字以内”等说明。
-        不要输出审稿判决。
+        约束：
+        - 若信息不足，直接写“摘要未披露”。
+        - 不允许出现审稿口吻或主观批评。
+        - 当前信息来源层级为：{source_level}。
 
-        论文元信息：
         标题：{paper.title}
-        链接：{paper.url}
-        作者：{', '.join(paper.authors[:10]) if paper.authors else 'N/A'}
         摘要：{paper.abstract[:7000]}
         """
     ).strip()
 
 
-def analyze_paper(client: OpenAI, paper: Paper) -> str:
+def analyze_paper(client: OpenAI, paper: Paper, category: str) -> str:
     completion = client.chat.completions.create(
         model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
-        temperature=0.2,
+        temperature=0.1,
         messages=[
-            {"role": "system", "content": "你是严谨的论文评审助手。"},
-            {"role": "user", "content": build_prompt(paper)},
+            {"role": "system", "content": "你是严谨的信息抽取助手。"},
+            {"role": "user", "content": build_prompt(paper, category)},
         ],
     )
     return (completion.choices[0].message.content or "").strip()
+
+
 
 
 def clean_symbols(text: str) -> str:
@@ -638,55 +646,102 @@ def clean_symbols(text: str) -> str:
     return "\n".join(lines)
 
 
-def strip_meta_labels(text: str) -> str:
-    banned = [
-        "45字",
-        "几个要点",
-        "全文精读",
-        "核心结论",
+def parse_structured_analysis(text: str) -> Dict[str, str]:
+    keys = [
+        "关键词", "纳入理由", "作者声称", "Agent归纳", "一句话核心", "为什么值得看",
+        "论文明确方法", "论文明确结果", "局限/缺口",
     ]
-    kept: List[str] = []
-    for line in text.splitlines():
+    data: Dict[str, str] = {k: "摘要未披露" for k in keys}
+    for line in clean_symbols(text).splitlines():
         s = line.strip()
-        if any(k in s for k in banned):
+        if "：" not in s:
             continue
-        kept.append(line)
-    return "\n".join(kept).strip()
+        k, v = s.split("：", 1)
+        k = k.strip()
+        if k in data and v.strip():
+            data[k] = v.strip()
+
+    if "具体幅度" not in data["论文明确结果"] and any(x in data["论文明确结果"] for x in ["未披露", "未知", "不详"]):
+        data["论文明确结果"] = "摘要未披露具体幅度。"
+
+    # compact lengths for 250-350 chars target
+    max_len = {
+        "关键词": 40, "纳入理由": 44, "作者声称": 44, "Agent归纳": 44,
+        "一句话核心": 42, "为什么值得看": 46, "论文明确方法": 64,
+        "论文明确结果": 64, "局限/缺口": 44,
+    }
+    for k, m in max_len.items():
+        if len(data[k]) > m:
+            data[k] = data[k][:m].rstrip("，；。 ") + "。"
+    return data
 
 
+def confidence_level(paper: Paper) -> str:
+    if paper.abstract and len(paper.abstract) > 900:
+        return "中"
+    if paper.abstract:
+        return "低"
+    return "低"
 
 
-def format_analysis_text(text: str) -> List[str]:
-    raw = clean_symbols(strip_meta_labels(text))
-    lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
-
-    def pick(prefix: str) -> str:
-        for ln in lines:
-            if ln.startswith(prefix):
-                return ln
-        return ""
-
-    core = pick("一句话核心：")
-    bg = pick("背景与现状：")
-    mr = pick("方法与结果：")
-    sig = pick("意义与局限：")
-
-    if core and bg and mr and sig:
-        return [core, bg, mr, sig]
-
-    # fallback: keep first long sentence as core and then structured blocks
-    joined = " ".join(lines)
-    if not joined:
-        return []
-    parts = [s.strip() for s in re.split(r"[。!?]", joined) if s.strip()]
-    core_fallback = f"一句话核心：{parts[0]}" if parts else "一句话核心："
-    rest = joined.replace(parts[0], "", 1).strip() if parts else joined
+def render_paper_block(index: int, item: AnalyzedPaper, parsed: Dict[str, str]) -> List[str]:
+    paper = item.paper
+    source_level = "标题+摘要" if paper.abstract else "仅标题"
+    published_bj = paper.published.astimezone(BEIJING_TZ).strftime("%Y-%m-%d %H:%M")
     return [
-        core_fallback,
-        f"背景与现状：{rest[:180]}",
-        f"方法与结果：{rest[180:360] if len(rest) > 180 else rest}",
-        f"意义与局限：{rest[360:540] if len(rest) > 360 else rest}",
+        "分隔线",
+        f"论文{index}：{paper.title}",
+        f"发布时间：{published_bj}（北京时间）",
+        f"链接：{paper.url}",
+        f"论文类型：{infer_paper_type(paper)}",
+        f"关键词：{parsed['关键词']}",
+        f"纳入理由：{parsed['纳入理由']}",
+        f"一句话核心：{parsed['一句话核心']}",
+        f"为什么值得看：{parsed['为什么值得看']}",
+        f"作者声称：{parsed['作者声称'].replace('作者声称：', '').strip()}",
+        f"Agent归纳：{parsed['Agent归纳'].replace('Agent归纳：', '').strip()}",
+        f"论文明确方法：{parsed['论文明确方法']}",
+        f"论文明确结果：{parsed['论文明确结果']}",
+        f"局限/缺口：{parsed['局限/缺口']}",
+        f"信息来源层级：{source_level}",
+        f"结论可信度：{confidence_level(paper)}",
+        f"与产业接口：{infer_industry_interface(paper)}",
     ]
+
+
+def build_overview_lines(items: List[AnalyzedPaper]) -> List[str]:
+    if not items:
+        return [
+            "今日总篇数：0",
+            "各方向篇数：World Engine 0；Data Infra 0",
+            "今日最值得读 Top 3：无",
+            "当日趋势：无",
+            "总体判断：今天未检索到符合条件的论文。",
+        ]
+
+    world = [x for x in items if x.category == "World Engine"]
+    infra = [x for x in items if x.category == "Data Infra"]
+    top3 = sorted(items, key=lambda x: ranking_score(x.paper), reverse=True)[:3]
+    trend_pool = " ".join([normalize(f"{x.paper.title} {x.paper.abstract}") for x in items])
+
+    trend_lines: List[str] = []
+    if any(k in trend_pool for k in ["world model", "world simulator", "digital twin", "世界模型"]):
+        trend_lines.append("世界模型与仿真能力继续朝可训练、可评测方向收敛")
+    if any(k in trend_pool for k in ["pipeline", "etl", "ingestion", "lakehouse", "数据管道", "湖仓"]):
+        trend_lines.append("数据基础设施关注管道效率、治理与可运营性")
+    if any(k in trend_pool for k in ["benchmark", "evaluation", "评测", "部署", "latency"]):
+        trend_lines.append("评测与部署指标被更频繁地前置到研究叙述")
+    if not trend_lines:
+        trend_lines = ["当日样本较少，趋势信号有限"]
+
+    return [
+        f"今日总篇数：{len(items)}",
+        f"各方向篇数：World Engine {len(world)}；Data Infra {len(infra)}",
+        "今日最值得读 Top 3：" + "；".join([f"{i+1}.{x.paper.title}" for i, x in enumerate(top3)]),
+        "当日趋势：" + "；".join(trend_lines[:3]),
+        "总体判断：今天的高相关论文以工程落地信息为主，适合用于技术路线和投资跟踪。",
+    ]
+
 
 def to_html(report_text: str) -> str:
     lines = report_text.splitlines()
@@ -768,29 +823,34 @@ def build_daily_digest(client: OpenAI) -> Tuple[str, str]:
     if not papers:
         text = (
             "World Engine 与 Data Infra 论文日报\n"
-            "今日发布概览：今天没有检索到符合条件的论文。\n"
-            "结果：未检索到符合条件的论文\n"
-            "说明：当前严格按北京时间昨天与今天筛选"
+            "今日总篇数：0\n"
+            "各方向篇数：World Engine 0；Data Infra 0\n"
+            "今日最值得读 Top 3：无\n"
+            "当日趋势：无\n"
+            "总体判断：今天未检索到符合条件的论文。"
         )
-        text = clean_symbols(text)
-        return text, to_html(text)
+        cleaned = clean_symbols(text)
+        return cleaned, to_html(cleaned)
 
-    selected = diversify_sources(papers, int(os.environ.get("MAX_PAPERS", "10")))
+    selected = diversify_sources(
+        sorted(papers, key=ranking_score, reverse=True),
+        int(os.environ.get("MAX_PAPERS", "10")),
+    )
 
     analyzed: List[AnalyzedPaper] = []
+    parsed_map: Dict[str, Dict[str, str]] = {}
     for paper in selected:
         category = classify_paper(paper)
-        analysis_lines = format_analysis_text(analyze_paper(client, paper))
-        analyzed.append(AnalyzedPaper(paper=paper, category=category, analysis_lines=analysis_lines))
+        raw = analyze_paper(client, paper, category)
+        parsed = parse_structured_analysis(raw)
+        analyzed.append(AnalyzedPaper(paper=paper, category=category, analysis_lines=[]))
+        parsed_map[paper.title] = parsed
 
     world_items = [x for x in analyzed if x.category == "World Engine"]
     infra_items = [x for x in analyzed if x.category == "Data Infra"]
 
-    blocks = [
-        "World Engine 与 Data Infra 论文日报",
-        build_day_summary(selected),
-        build_day_lead_from_analyses(analyzed),
-    ]
+    blocks: List[str] = ["World Engine 与 Data Infra 论文日报"]
+    blocks.extend(build_overview_lines(analyzed))
 
     def append_category(cat_title: str, cat_items: List[AnalyzedPaper], start_idx: int) -> int:
         idx = start_idx
@@ -798,16 +858,7 @@ def build_daily_digest(client: OpenAI) -> Tuple[str, str]:
             return idx
         blocks.append(f"分类标题：{cat_title}")
         for item in cat_items:
-            paper = item.paper
-            published_bj = paper.published.astimezone(BEIJING_TZ).strftime("%Y-%m-%d %H:%M")
-            blocks.extend(
-                [
-                    "分隔线",
-                    f"论文{idx}：{paper.title}",
-                    f"发布时间：{published_bj}（北京时间）",
-                    f"链接：{paper.url}",
-                ] + item.analysis_lines
-            )
+            blocks.extend(render_paper_block(idx, item, parsed_map[item.paper.title]))
             idx += 1
         return idx
 
@@ -815,8 +866,7 @@ def build_daily_digest(client: OpenAI) -> Tuple[str, str]:
     n = append_category("World Engine", world_items, n)
     append_category("Data Infra", infra_items, n)
 
-    text = "\n".join(blocks)
-    text = clean_symbols(text)
+    text = clean_symbols("\n".join(blocks))
     return text, to_html(text)
 
 
