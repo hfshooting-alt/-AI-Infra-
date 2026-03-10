@@ -370,24 +370,22 @@ def build_prompt(paper: Paper) -> str:
         f"""
         你是论文深读器（增量导向）。
 
-        请分析下面论文并输出三段内容：
-        第一段给一句核心结论
-        第二段给3到6条要点
-        第三段给全文精读（缺口与增量、核心机制、关键概念）
+        请严格按下面四行模板输出，不要添加其它栏目：
+        一句话核心：<一句话，点出论文最关键贡献>
+        背景与现状：<当前技术现状、痛点、论文填补的缺口>
+        方法与结果：<论文方法要点、关键实验结果、是否站得住>
+        意义与局限：<这项工作的意义、可迁移价值、主要局限>
 
-        输出时不要写栏目标题，不要写括号解释，不要写字数要求。
+        输出要求：
+        只输出以上四行。
+        不要输出“45字以内”等说明。
+        不要输出审稿判决。
 
         论文元信息：
         标题：{paper.title}
-        来源：{paper.source}
         链接：{paper.url}
         作者：{', '.join(paper.authors[:10]) if paper.authors else 'N/A'}
         摘要：{paper.abstract[:7000]}
-
-        重要约束：
-        判断这篇工作增量是否站得住。
-        不要输出审稿结论板块。
-        中文输出。
         """
     ).strip()
 
@@ -412,7 +410,6 @@ def clean_symbols(text: str) -> str:
 
 def strip_meta_labels(text: str) -> str:
     banned = [
-        "一句话核心",
         "45字",
         "几个要点",
         "全文精读",
@@ -426,6 +423,40 @@ def strip_meta_labels(text: str) -> str:
         kept.append(line)
     return "\n".join(kept).strip()
 
+
+
+
+def format_analysis_text(text: str) -> List[str]:
+    raw = clean_symbols(strip_meta_labels(text))
+    lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+
+    def pick(prefix: str) -> str:
+        for ln in lines:
+            if ln.startswith(prefix):
+                return ln
+        return ""
+
+    core = pick("一句话核心：")
+    bg = pick("背景与现状：")
+    mr = pick("方法与结果：")
+    sig = pick("意义与局限：")
+
+    if core and bg and mr and sig:
+        return [core, bg, mr, sig]
+
+    # fallback: keep first long sentence as core and then structured blocks
+    joined = " ".join(lines)
+    if not joined:
+        return []
+    parts = [s.strip() for s in re.split(r"[。!?]", joined) if s.strip()]
+    core_fallback = f"一句话核心：{parts[0]}" if parts else "一句话核心："
+    rest = joined.replace(parts[0], "", 1).strip() if parts else joined
+    return [
+        core_fallback,
+        f"背景与现状：{rest[:180]}",
+        f"方法与结果：{rest[180:360] if len(rest) > 180 else rest}",
+        f"意义与局限：{rest[360:540] if len(rest) > 360 else rest}",
+    ]
 
 def to_html(report_text: str) -> str:
     lines = report_text.splitlines()
@@ -441,7 +472,7 @@ def to_html(report_text: str) -> str:
             continue
         if striped.startswith("日报标题"):
             html_lines.append(f"<h1 style='font-size:28px;margin:8px 0 12px'>{html.escape(striped)}</h1>")
-        elif striped.startswith("论文") and "：" in striped:
+        elif re.match(r"^论文\d+：", striped):
             if in_paper:
                 html_lines.append("</div>")
             in_paper = True
@@ -449,6 +480,12 @@ def to_html(report_text: str) -> str:
             html_lines.append(f"<h2 style='font-size:20px;margin:0 0 8px'>{html.escape(striped)}</h2>")
         elif striped.startswith("分隔线"):
             html_lines.append("<hr style='border:none;border-top:1px solid #ddd;margin:18px 0' />")
+        elif striped.startswith("一句话核心："):
+            html_lines.append(f"<p style='margin:8px 0;padding:8px 10px;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;font-size:18px;font-weight:700'>{html.escape(striped)}</p>")
+        elif striped.startswith("背景与现状：") or striped.startswith("方法与结果：") or striped.startswith("意义与局限："):
+            title, content = striped.split("：", 1)
+            html_lines.append(f"<p style='margin:10px 0 4px;font-size:18px;font-weight:700'>{html.escape(title)}</p>")
+            html_lines.append(f"<p style='margin:0 0 8px'>{html.escape(content)}</p>")
         else:
             html_lines.append(f"<p style='margin:6px 0'>{html.escape(striped)}</p>")
     if in_paper:
@@ -458,9 +495,7 @@ def to_html(report_text: str) -> str:
 
 
 def build_daily_digest(client: OpenAI) -> Tuple[str, str]:
-    papers, source_counts = collect_recent_papers()
-    today = now_beijing().date()
-    yesterday = today - dt.timedelta(days=1)
+    papers, _ = collect_recent_papers()
 
     if not papers:
         text = (
@@ -477,16 +512,14 @@ def build_daily_digest(client: OpenAI) -> Tuple[str, str]:
 
     for idx, paper in enumerate(papers[:max_papers], start=1):
         published_bj = paper.published.astimezone(BEIJING_TZ).strftime("%Y-%m-%d %H:%M")
-        analysis = clean_symbols(strip_meta_labels(analyze_paper(client, paper)))
+        analysis_lines = format_analysis_text(analyze_paper(client, paper))
         blocks.extend(
             [
                 "分隔线",
                 f"论文{idx}：{paper.title}",
-                f"来源：{paper.source}",
                 f"发布时间：{published_bj}（北京时间）",
                 f"链接：{paper.url}",
-                analysis,
-            ]
+            ] + analysis_lines
         )
 
     text = "\n".join(blocks)
