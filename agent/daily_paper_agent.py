@@ -1016,14 +1016,11 @@ def build_overview_lines(items: List[AnalyzedPaper]) -> List[str]:
     if not items:
         return [
             "今日总篇数：0",
-            "各方向篇数：World Engine 0；Data Infra 0",
             "今日最值得读 Top 3：无",
             "当日趋势：无",
             "总体判断：今天未检索到符合条件的论文。",
         ]
 
-    world = [x for x in items if x.category == "World Engine"]
-    infra = [x for x in items if x.category == "Data Infra"]
     top3 = sorted(items, key=lambda x: x.early_score, reverse=True)[:3]
     trend_pool = " ".join([normalize(f"{x.paper.title} {x.paper.abstract}") for x in items])
 
@@ -1039,7 +1036,6 @@ def build_overview_lines(items: List[AnalyzedPaper]) -> List[str]:
 
     return [
         f"今日总篇数：{len(items)}",
-        f"各方向篇数：World Engine {len(world)}；Data Infra {len(infra)}",
         "今日最值得读 Top 3：" + "；".join([f"{i+1}.{x.paper.title}" for i, x in enumerate(top3)]),
         "当日趋势：" + "；".join(trend_lines[:3]),
         "总体判断：今天的高相关论文以工程落地信息为主，适合用于技术路线和投资跟踪。",
@@ -1127,7 +1123,6 @@ def build_daily_digest(client: OpenAI) -> Tuple[str, str]:
         text = (
             "World Engine 与 Data Infra 论文日报\n"
             "今日总篇数：0\n"
-            "各方向篇数：World Engine 0；Data Infra 0\n"
             "今日最值得读 Top 3：无\n"
             "当日趋势：无\n"
             "总体判断：今天未检索到符合条件的论文。"
@@ -1162,7 +1157,6 @@ def build_daily_digest(client: OpenAI) -> Tuple[str, str]:
         text = (
             "World Engine 与 Data Infra 论文日报\n"
             "今日总篇数：0\n"
-            "各方向篇数：World Engine 0；Data Infra 0\n"
             "今日最值得读 Top 3：无\n"
             "当日趋势：无\n"
             f"总体判断：候选论文正文抓取不足（跳过{skipped_no_fulltext}篇），未生成正文级解读。"
@@ -1173,25 +1167,14 @@ def build_daily_digest(client: OpenAI) -> Tuple[str, str]:
 
     analyzed.sort(key=lambda x: x.early_score, reverse=True)
     rank_map = {it.paper.title: i + 1 for i, it in enumerate(analyzed)}
-    world_items = [x for x in analyzed if x.category == "World Engine"]
-    infra_items = [x for x in analyzed if x.category == "Data Infra"]
 
     blocks: List[str] = ["World Engine 与 Data Infra 论文日报"]
     blocks.extend(build_overview_lines(analyzed))
 
-    def append_category(cat_title: str, cat_items: List[AnalyzedPaper], start_idx: int) -> int:
-        idx = start_idx
-        if not cat_items:
-            return idx
-        blocks.append(f"分类标题：{cat_title}")
-        for item in cat_items:
-            blocks.extend(render_paper_block(idx, item, parsed_map[item.paper.title], rank_map.get(item.paper.title, idx)))
-            idx += 1
-        return idx
-
     n = 1
-    n = append_category("World Engine", world_items, n)
-    append_category("Data Infra", infra_items, n)
+    for item in analyzed:
+        blocks.extend(render_paper_block(n, item, parsed_map[item.paper.title], rank_map.get(item.paper.title, n)))
+        n += 1
 
     text = clean_symbols("\n".join(blocks))
     return text, to_html(text)
