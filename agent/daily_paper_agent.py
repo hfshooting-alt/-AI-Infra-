@@ -138,6 +138,7 @@ class AnalyzedPaper:
     category: str
     analysis_lines: List[str]
     early_score: int = 0
+    discussion_score: float = 0.0
 
 
 def now_utc() -> dt.datetime:
@@ -223,20 +224,26 @@ def html_strip(value: str) -> str:
     return re.sub(r"<[^>]+>", " ", v)
 
 
-def in_beijing_yesterday_or_today(published: Optional[dt.datetime]) -> bool:
+def target_beijing_date_window() -> Tuple[dt.date, dt.date]:
+    """Return inclusive window [t-17, t-11] in Beijing date."""
+    today = now_beijing().date()
+    start = today - dt.timedelta(days=17)
+    end = today - dt.timedelta(days=11)
+    return start, end
+
+
+def in_target_beijing_window(published: Optional[dt.datetime]) -> bool:
     if not published:
         return False
     bj_date = published.astimezone(BEIJING_TZ).date()
-    today = now_beijing().date()
-    yesterday = today - dt.timedelta(days=1)
-    return bj_date == today or bj_date == yesterday
+    start, end = target_beijing_date_window()
+    return start <= bj_date <= end
 
 
 def beijing_day_window() -> Tuple[str, str]:
-    """Return yesterday/today in Beijing as YYYY-MM-DD (for source-side filters)."""
-    today = now_beijing().date()
-    yesterday = today - dt.timedelta(days=1)
-    return yesterday.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
+    """Return t-17/t-11 in Beijing as YYYY-MM-DD (for source-side filters)."""
+    start, end = target_beijing_date_window()
+    return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 
 
 def topical_score(title: str, abstract: str) -> int:
@@ -279,7 +286,7 @@ def fetch_arxiv() -> List[Paper]:
     papers: List[Paper] = []
     for e in feed.entries:
         published = parse_iso_datetime(e.get("published"))
-        if not in_beijing_yesterday_or_today(published):
+        if not in_target_beijing_window(published):
             continue
         papers.append(
             Paper(
@@ -320,7 +327,7 @@ def fetch_crossref() -> List[Paper]:
             published_print = parse_date_parts(((item.get("published-print") or {}).get("date-parts") or [[None]])[0])
             issued = parse_date_parts(((item.get("issued") or {}).get("date-parts") or [[None]])[0])
             published = published_online or published_print or issued
-            if not in_beijing_yesterday_or_today(published):
+            if not in_target_beijing_window(published):
                 continue
             venue = (item.get("container-title") or ["Crossref"])[0]
             authors = [
@@ -384,7 +391,7 @@ def fetch_openalex() -> List[Paper]:
         resp.raise_for_status()
         for r in resp.json().get("results", []):
             published = parse_date_string(r.get("publication_date"))
-            if not in_beijing_yesterday_or_today(published):
+            if not in_target_beijing_window(published):
                 continue
             authors = [
                 (a.get("author") or {}).get("display_name", "")
@@ -440,7 +447,7 @@ def fetch_semantic_scholar() -> List[Paper]:
             published = parse_iso_datetime(p.get("publicationDate"))
             if not published:
                 published = parse_date_string(p.get("publicationDate"))
-            if not in_beijing_yesterday_or_today(published):
+            if not in_target_beijing_window(published):
                 continue
             if not (from_date <= published.astimezone(BEIJING_TZ).strftime("%Y-%m-%d") <= to_date):
                 continue
@@ -482,7 +489,7 @@ def fetch_rss_journals() -> List[Paper]:
                 parse_iso_datetime(e.get("published"))
                 or parse_struct_time(e.get("published_parsed"))
             )
-            if not in_beijing_yesterday_or_today(published):
+            if not in_target_beijing_window(published):
                 continue
 
             title = e.get("title", "")
@@ -580,7 +587,7 @@ def collect_recent_papers() -> Tuple[List[Paper], Dict[str, int]]:
             rows = src()
             got.extend(rows)
             counts[src.__name__] = len(rows)
-            print(f"[INFO] {src.__name__}: {len(rows)} rows in Beijing yesterday/today")
+            print(f"[INFO] {src.__name__}: {len(rows)} rows in Beijing t-17到t-11")
         except Exception as exc:
             counts[src.__name__] = 0
             print(f"[WARN] {src.__name__} failed: {exc}")
@@ -608,9 +615,6 @@ def classify_paper(paper: Paper) -> str:
 
     if infra_score >= world_score and infra_score > 0 and physical_score > 0:
         return "Data Infra"
-    return "World Engine"
-
-    # tie-break: infra-first when data stack terms appear
     if any(normalize(k) in txt for k in ["pipeline", "ingestion", "etl", "lakehouse", "feature store", "数据管道", "湖仓"]):
         return "Data Infra"
     return "World Engine"
@@ -702,6 +706,104 @@ def _github_metrics(repo_url: str) -> Tuple[int, int]:
         return int(js.get("stargazers_count") or 0), int(js.get("forks_count") or 0)
     except Exception:
         return 0, 0
+
+
+def _github_search_discussion_count(query: str) -> int:
+    if not query.strip():
+        return 0
+    try:
+        q = f'"{query}" in:title,body'
+        r = requests.get(
+            "https://api.github.com/search/issues",
+            params={"q": q, "per_page": 20},
+            timeout=15,
+            headers=REQUEST_HEADERS,
+        )
+        if r.status_code != 200:
+            return 0
+        items = r.json().get("items", []) or []
+        return len(items)
+    except Exception:
+        return 0
+
+
+def _reddit_discussion_score(query: str) -> float:
+    if not query.strip():
+        return 0.0
+    try:
+        r = requests.get(
+            "https://www.reddit.com/search.json",
+            params={"q": query, "sort": "new", "limit": 30, "restrict_sr": "false"},
+            timeout=15,
+            headers={**REQUEST_HEADERS, "User-Agent": "Mozilla/5.0 (daily-paper-agent)"},
+        )
+        if r.status_code != 200:
+            return 0.0
+        children = ((r.json().get("data") or {}).get("children") or [])
+        mention_count = len(children)
+        comments = sum(int(((c.get("data") or {}).get("num_comments") or 0)) for c in children)
+        score = sum(int(((c.get("data") or {}).get("score") or 0)) for c in children)
+        return float(mention_count) + comments * 0.12 + score * 0.03
+    except Exception:
+        return 0.0
+
+
+def _x_discussion_count(query: str) -> int:
+    if not query.strip():
+        return 0
+    endpoints = os.environ.get(
+        "X_SEARCH_RSS_ENDPOINTS",
+        "https://nitter.net/search/rss?q={q},https://nitter.poast.org/search/rss?q={q}",
+    ).split(",")
+    for ep in endpoints:
+        ep = ep.strip()
+        if not ep:
+            continue
+        try:
+            url = ep.format(q=requests.utils.quote(query))
+            feed = feedparser.parse(url)
+            entries = getattr(feed, "entries", []) or []
+            if entries:
+                return len(entries)
+        except Exception:
+            continue
+    return 0
+
+
+def compute_social_discussion_score(paper: Paper) -> Tuple[float, Dict[str, float]]:
+    arxiv_id = _parse_arxiv_id(paper.url)
+    title_query = re.sub(r"\s+", " ", paper.title).strip()[:180]
+    query = arxiv_id or title_query
+
+    github_mentions = _github_search_discussion_count(query)
+    reddit_score = _reddit_discussion_score(query)
+    x_mentions = _x_discussion_count(query)
+
+    score = github_mentions * 1.4 + reddit_score + x_mentions * 1.0
+    details = {
+        "github_mentions": float(github_mentions),
+        "reddit_score": round(reddit_score, 2),
+        "x_mentions": float(x_mentions),
+        "social_score": round(score, 2),
+    }
+    return score, details
+
+
+def pick_top_discussed_papers(papers: List[Paper], limit: int = 3) -> List[Paper]:
+    if not papers:
+        return []
+    pool_size = int(os.environ.get("DISCUSSION_CANDIDATE_POOL", "24"))
+    pool = sorted(papers, key=ranking_score, reverse=True)[: max(limit, pool_size)]
+
+    scored: List[Tuple[Paper, float]] = []
+    for p in pool:
+        social_score, details = compute_social_discussion_score(p)
+        setattr(p, "_social_score", social_score)
+        setattr(p, "_social_details", details)
+        scored.append((p, social_score))
+
+    scored.sort(key=lambda x: (x[1], ranking_score(x[0]), topical_score(x[0].title, x[0].abstract)), reverse=True)
+    return [x[0] for x in scored[:limit]]
 
 
 def compute_early_quality_score(paper: Paper, category: str, fulltext_context: str) -> Dict[str, object]:
@@ -910,28 +1012,28 @@ def has_readable_fulltext(fulltext_context: str) -> bool:
 def build_prompt(paper: Paper, category: str, fulltext_context: str) -> str:
     return textwrap.dedent(
         f"""
-        你是论文原文信息整理 Agent。目标是给非专业读者输出“准确、完整、可读”的三段解读。
+        你是论文原文信息整理 Agent。读者是非AI专业的普通大学教育背景读者。
 
-        工作方式（请先内部执行，再输出最终答案）：
-        1) 先从正文提取：研究问题、已有局限、核心方法步骤、实验结论、作者写明的局限与未来方向。
-        2) 仅保留标题/摘要/正文明确支持的信息；不补充推断，不脑补结论。
-        3) 重新组织成清晰中文短句，避免术语堆砌与半句收尾。
+        你的要求：
+        1) 只写标题、摘要、正文里明确支持的信息，不做猜测。
+        2) 语言要短句、易懂、少术语。
+        3) 如果某项在原文缺失，直接写“原文未明确说明”。
+        4) 每一行必须是完整句，不能半句收尾。
 
-        严格输出以下四行，不要输出其它字段：
-        一句话核心：<一句话完整说明论文做了什么、解决什么问题、得到什么结果；必须是完整句>
-        论文背景：<2-3句，包含“背景局限+论文创新点”，只写可证实内容>
-        方法与结果：<2-3句，写清方法主线与结果；无量化就写“原文未披露具体幅度”>
-        局限与展望：<2-3句，只写作者明确提到的边界与后续方向>
+        严格输出以下五行，不要输出其它字段：
+        论文想解决什么问题、该问题为什么重要：<2-3句>
+        论文的核心方法是什么、和以前相比如何创新：<2-3句>
+        论文的核心结论：<2-3句>
+        论文的增量价值是什么、会带来什么影响：<2-3句>
+        论文的局限性和不确定性、没有解决什么问题：<2-3句>
 
-        语言要求：
-        短句优先。易懂优先。禁止残句、禁止“推理…/指标…/性能和…”这种未说完的结尾。
-
-        论文分类：{category}
-        标题：{paper.title}
+        论文标题：{paper.title}
+        分类：{category}
         作者：{", ".join(paper.authors[:10]) if paper.authors else "未披露"}
-        发表机构：{", ".join(paper.institutions[:8]) if paper.institutions else "未披露"}
-        摘要：{paper.abstract[:7000]}
-        正文：{fulltext_context[:18000]}
+        摘要：{paper.abstract[:3000] if paper.abstract else "未披露"}
+
+        以下是正文提取片段（若为空表示仅抓到摘要）：
+        {fulltext_context[:12000] if fulltext_context else "未抓取到正文"}
         """
     ).strip()
 
@@ -957,15 +1059,24 @@ def clean_symbols(text: str) -> str:
 
 
 def parse_structured_analysis(text: str) -> Dict[str, str]:
-    keys = ["一句话核心", "论文背景", "方法与结果", "局限与展望"]
+    keys = [
+        "论文想解决什么问题、该问题为什么重要",
+        "论文的核心方法是什么、和以前相比如何创新",
+        "论文的核心结论",
+        "论文的增量价值是什么、会带来什么影响",
+        "论文的局限性和不确定性、没有解决什么问题",
+    ]
     aliases = {
-        "一句话核心": "一句话核心",
-        "论文背景": "论文背景",
-        "背景": "论文背景",
-        "方法与结果": "方法与结果",
-        "论文方法与结果": "方法与结果",
-        "局限与展望": "局限与展望",
-        "论文局限与展望": "局限与展望",
+        "论文想解决什么问题、该问题为什么重要": "论文想解决什么问题、该问题为什么重要",
+        "问题与重要性": "论文想解决什么问题、该问题为什么重要",
+        "论文的核心方法是什么、和以前相比如何创新": "论文的核心方法是什么、和以前相比如何创新",
+        "核心方法与创新": "论文的核心方法是什么、和以前相比如何创新",
+        "论文的核心结论": "论文的核心结论",
+        "核心结论": "论文的核心结论",
+        "论文的增量价值是什么、会带来什么影响": "论文的增量价值是什么、会带来什么影响",
+        "增量价值与影响": "论文的增量价值是什么、会带来什么影响",
+        "论文的局限性和不确定性、没有解决什么问题": "论文的局限性和不确定性、没有解决什么问题",
+        "局限性和不确定性": "论文的局限性和不确定性、没有解决什么问题",
     }
 
     data: Dict[str, str] = {k: "未披露" for k in keys}
@@ -978,16 +1089,11 @@ def parse_structured_analysis(text: str) -> Dict[str, str]:
         if k and v.strip():
             data[k] = v.strip()
 
-    if data["方法与结果"].strip() in ["未披露", "摘要未披露", "未知", "不详"]:
-        data["方法与结果"] = "原文未披露具体幅度。"
-
-    # keep complete sentences; no hard character truncation artifacts
-    data["一句话核心"] = _keep_first_sentences(_finalize_sentence(data["一句话核心"]), 1)
-    data["论文背景"] = _keep_first_sentences(_finalize_sentence(data["论文背景"]), 3)
-    data["方法与结果"] = _keep_first_sentences(_finalize_sentence(data["方法与结果"]), 3)
-    data["局限与展望"] = _keep_first_sentences(_finalize_sentence(data["局限与展望"]), 3)
+    for k in keys:
+        if data[k].strip() in ["未披露", "摘要未披露", "未知", "不详"]:
+            data[k] = "原文未明确说明。"
+        data[k] = _keep_first_sentences(_finalize_sentence(data[k]), 3)
     return data
-
 
 
 def _finalize_sentence(text: str) -> str:
@@ -1054,12 +1160,13 @@ def render_paper_block(index: int, item: AnalyzedPaper, parsed: Dict[str, str], 
         f"论文{index}：{paper.title}",
         f"发布时间：{published_bj}（北京时间）",
         f"链接：{paper.url}",
-        f"重要性排名：第{rank_pos}名",
+        f"讨论热度排名：第{rank_pos}名",
         f"作者：{format_author_orgs(paper)}",
-        f"一句话核心：{parsed['一句话核心']}",
-        f"论文背景：背景&创新点：{parsed['论文背景']}",
-        f"方法与结果：{parsed['方法与结果']}",
-        f"局限与展望：{parsed['局限与展望']}",
+        f"论文想解决什么问题、该问题为什么重要：{parsed['论文想解决什么问题、该问题为什么重要']}",
+        f"论文的核心方法是什么、和以前相比如何创新：{parsed['论文的核心方法是什么、和以前相比如何创新']}",
+        f"论文的核心结论：{parsed['论文的核心结论']}",
+        f"论文的增量价值是什么、会带来什么影响：{parsed['论文的增量价值是什么、会带来什么影响']}",
+        f"论文的局限性和不确定性、没有解决什么问题：{parsed['论文的局限性和不确定性、没有解决什么问题']}",
     ]
 
 
@@ -1067,12 +1174,12 @@ def build_overview_lines(items: List[AnalyzedPaper]) -> List[str]:
     if not items:
         return [
             "今日总篇数：0",
-            "今日最值得读 Top 3：无",
+            "Top 3（按X/Reddit/GitHub讨论量）：无",
             "当日趋势：无",
             "总体判断：今天未检索到符合条件的论文。",
         ]
 
-    top3 = sorted(items, key=lambda x: x.early_score, reverse=True)[:3]
+    top3 = sorted(items, key=lambda x: (x.discussion_score, x.early_score), reverse=True)[:3]
     trend_pool = " ".join([normalize(f"{x.paper.title} {x.paper.abstract}") for x in items])
 
     trend_lines: List[str] = []
@@ -1087,7 +1194,7 @@ def build_overview_lines(items: List[AnalyzedPaper]) -> List[str]:
 
     return [
         f"今日总篇数：{len(items)}",
-        "今日最值得读 Top 3：" + "；".join([f"{i+1}.{x.paper.title}" for i, x in enumerate(top3)]),
+        "Top 3（按X/Reddit/GitHub讨论量）：" + "；".join([f"{i+1}.{x.paper.title}" for i, x in enumerate(top3)]),
         "当日趋势：" + "；".join(trend_lines[:3]),
         "总体判断：今天的高相关论文以工程落地信息为主，适合用于技术路线和投资跟踪。",
     ]
@@ -1147,11 +1254,7 @@ def to_html(report_text: str) -> str:
         elif striped.startswith("分隔线"):
             close_paper_card()
             html_lines.append("<hr style='border:none;border-top:1px solid #d7deea;margin:18px 0' />")
-        elif striped.startswith("一句话核心："):
-            html_lines.append(
-                f"<p style='margin:10px 0 14px;padding:10px 12px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;font-size:19px;font-weight:700;line-height:1.75'>{html.escape(striped)}</p>"
-            )
-        elif striped.startswith("论文背景：") or striped.startswith("方法与结果：") or striped.startswith("局限与展望："):
+        elif striped.startswith("论文想解决什么问题、该问题为什么重要：") or striped.startswith("论文的核心方法是什么、和以前相比如何创新：") or striped.startswith("论文的核心结论：") or striped.startswith("论文的增量价值是什么、会带来什么影响：") or striped.startswith("论文的局限性和不确定性、没有解决什么问题："):
             title, content = striped.split("：", 1)
             html_lines.append(
                 f"<p style='margin:14px 0 6px;font-size:20px;font-weight:800;line-height:1.35;color:#0f172a'>{html.escape(title)}</p>"
@@ -1171,19 +1274,24 @@ def build_daily_digest(client: OpenAI) -> Tuple[str, str]:
     papers, _ = collect_recent_papers()
 
     if not papers:
+        start, end = target_beijing_date_window()
         text = (
             "World Engine 与 Data Infra 论文日报\n"
+            f"筛选时间（北京时间）：{start.strftime('%Y-%m-%d')} 至 {end.strftime('%Y-%m-%d')}\n"
             "今日总篇数：0\n"
-            "今日最值得读 Top 3：无\n"
+            "Top 3（按X/Reddit/GitHub讨论量）：无\n"
             "当日趋势：无\n"
-            "总体判断：今天未检索到符合条件的论文。"
+            "总体判断：在目标时间窗内未检索到符合条件的论文。"
         )
         cleaned = clean_symbols(text)
         return cleaned, to_html(cleaned)
 
-    selected = diversify_sources(
-        sorted(papers, key=ranking_score, reverse=True),
-        int(os.environ.get("MAX_PAPERS", "10")),
+    selected = pick_top_discussed_papers(
+        diversify_sources(
+            sorted(papers, key=ranking_score, reverse=True),
+            int(os.environ.get("MAX_PAPERS", "18")),
+        ),
+        limit=3,
     )
 
     analyzed: List[AnalyzedPaper] = []
@@ -1200,15 +1308,17 @@ def build_daily_digest(client: OpenAI) -> Tuple[str, str]:
         early_score = int(((score_json.get("scores") or {}).get("total_score") or 0))
         raw = analyze_paper(client, paper, category, fulltext_context)
         parsed = parse_structured_analysis(raw)
-        analyzed.append(AnalyzedPaper(paper=paper, category=category, analysis_lines=[], early_score=early_score))
+        analyzed.append(AnalyzedPaper(paper=paper, category=category, analysis_lines=[], early_score=early_score, discussion_score=float(getattr(paper, "_social_score", 0.0))))
         parsed_map[paper.title] = parsed
         score_detail_map[paper.title] = score_json
 
     if not analyzed:
+        start, end = target_beijing_date_window()
         text = (
             "World Engine 与 Data Infra 论文日报\n"
+            f"筛选时间（北京时间）：{start.strftime('%Y-%m-%d')} 至 {end.strftime('%Y-%m-%d')}\n"
             "今日总篇数：0\n"
-            "今日最值得读 Top 3：无\n"
+            "Top 3（按X/Reddit/GitHub讨论量）：无\n"
             "当日趋势：无\n"
             f"总体判断：候选论文正文抓取不足（跳过{skipped_no_fulltext}篇），未生成正文级解读。"
         )
@@ -1216,10 +1326,14 @@ def build_daily_digest(client: OpenAI) -> Tuple[str, str]:
         return cleaned, to_html(cleaned)
 
 
-    analyzed.sort(key=lambda x: x.early_score, reverse=True)
+    analyzed.sort(key=lambda x: (x.discussion_score, x.early_score), reverse=True)
     rank_map = {it.paper.title: i + 1 for i, it in enumerate(analyzed)}
 
-    blocks: List[str] = ["World Engine 与 Data Infra 论文日报"]
+    start, end = target_beijing_date_window()
+    blocks: List[str] = [
+        "World Engine 与 Data Infra 论文日报",
+        f"筛选时间（北京时间）：{start.strftime('%Y-%m-%d')} 至 {end.strftime('%Y-%m-%d')}",
+    ]
     blocks.extend(build_overview_lines(analyzed))
 
     n = 1
