@@ -1201,73 +1201,143 @@ def build_overview_lines(items: List[AnalyzedPaper]) -> List[str]:
 
 
 def to_html(report_text: str) -> str:
-    lines = report_text.splitlines()
-    html_lines = [
-        "<html><body style='font-family:Inter,Segoe UI,PingFang SC,Arial,Helvetica,sans-serif;line-height:1.78;color:#dbe7ff;background:radial-gradient(1200px 500px at 10% -10%,#1f3c88 0%,transparent 45%),radial-gradient(900px 400px at 90% -20%,#0ea5e9 0%,transparent 42%),#0b1220;'>",
-        "<div style='max-width:1040px;margin:0 auto;padding:24px 18px 36px;'>",
+    lines = [ln.strip() for ln in report_text.splitlines() if ln.strip()]
+
+    title = "AI Pulse - X Daily Brief"
+    period = ""
+    summary = {
+        "今日总篇数": "0",
+        "Top 3（按X/Reddit/GitHub讨论量）": "无",
+        "当日趋势": "无",
+        "总体判断": "暂无可用结论",
+    }
+
+    papers: List[Dict[str, str]] = []
+    current: Dict[str, str] = {}
+
+    for ln in lines:
+        if ln.startswith("World Engine 与 Data Infra 论文周报"):
+            title = "AI Pulse - X Daily Brief"
+        elif ln.startswith("筛选时间（北京时间）："):
+            period = ln.split("：", 1)[1].strip()
+        elif ln.startswith("今日总篇数："):
+            summary["今日总篇数"] = ln.split("：", 1)[1].strip()
+        elif ln.startswith("Top 3（按X/Reddit/GitHub讨论量）："):
+            summary["Top 3（按X/Reddit/GitHub讨论量）"] = ln.split("：", 1)[1].strip()
+        elif ln.startswith("当日趋势："):
+            summary["当日趋势"] = ln.split("：", 1)[1].strip()
+        elif ln.startswith("总体判断："):
+            summary["总体判断"] = ln.split("：", 1)[1].strip()
+        elif ln.startswith("论文") and "：" in ln:
+            if current:
+                papers.append(current)
+            current = {"title": ln.split("：", 1)[1].strip(), "meta": "", "problem": "", "method": "", "conclusion": "", "value": "", "risk": ""}
+        elif current and ln.startswith("发布时间："):
+            current["meta"] += (" | " if current["meta"] else "") + ln
+        elif current and ln.startswith("作者："):
+            current["meta"] += (" | " if current["meta"] else "") + ln
+        elif current and ln.startswith("链接："):
+            current["meta"] += (" | " if current["meta"] else "") + ln
+        elif current and ln.startswith("论文想解决什么问题、该问题为什么重要："):
+            current["problem"] = ln.split("：", 1)[1].strip()
+        elif current and ln.startswith("论文的核心方法是什么、和以前相比如何创新："):
+            current["method"] = ln.split("：", 1)[1].strip()
+        elif current and ln.startswith("论文的核心结论："):
+            current["conclusion"] = ln.split("：", 1)[1].strip()
+        elif current and ln.startswith("论文的增量价值是什么、会带来什么影响："):
+            current["value"] = ln.split("：", 1)[1].strip()
+        elif current and ln.startswith("论文的局限性和不确定性、没有解决什么问题："):
+            current["risk"] = ln.split("：", 1)[1].strip()
+
+    if current:
+        papers.append(current)
+
+    summary_cards = [
+        ("Today’s Key Takeaway", summary["总体判断"]),
+        ("Primary Focus", summary["当日趋势"]),
+        ("Why It Matters", "该简报用于管理层快速把握今日高价值信号与可执行方向。"),
     ]
-    in_paper = False
 
-    def close_paper_card() -> None:
-        nonlocal in_paper
-        if in_paper:
-            html_lines.append("</div>")
-            in_paper = False
+    kpi_cards = [
+        ("本期篇数", summary["今日总篇数"]),
+        ("Top 3 热点", summary["Top 3（按X/Reddit/GitHub讨论量）"]),
+        ("主关注方向", summary["当日趋势"]),
+    ]
 
-    for line in lines:
-        striped = line.strip()
-        if not striped:
-            html_lines.append("<div style='height:12px'></div>")
-            continue
+    event_cards = []
+    for i, p in enumerate(papers[:3], start=1):
+        event_cards.append(f"""
+        <tr><td style='padding:0 0 14px 0'>
+          <table role='presentation' width='100%' cellspacing='0' cellpadding='0' style='background:#FFFFFF;border:1px solid #E5E7EB;border-radius:16px'>
+            <tr><td style='padding:22px 24px 12px 24px'>
+              <div style='font-size:14px;font-weight:600;color:#2563EB;margin-bottom:6px'>Hot Event {i}</div>
+              <div style='font-size:19px;line-height:1.45;font-weight:700;color:#111827;margin-bottom:8px'>{html.escape(p.get('title',''))}</div>
+              <div style='font-size:13px;line-height:1.6;color:#6B7280;margin-bottom:10px'>{html.escape(p.get('meta',''))}</div>
 
-        if striped.startswith("World Engine 与 Data Infra 论文周报"):
-            close_paper_card()
-            html_lines.append(
-                f"<h1 style='font-size:38px;font-weight:850;line-height:1.25;margin:6px 0 14px;color:#0b132b'>{html.escape(striped)}</h1>"
-            )
-        elif striped.startswith("今日发布概览："):
-            close_paper_card()
-            html_lines.append(
-                f"<p style='margin:8px 0 12px;padding:12px 14px;border-radius:10px;background:#ecfeff;border:1px solid #a5f3fc;font-size:16px;font-weight:600;line-height:1.7'>{html.escape(striped)}</p>"
-            )
-        elif striped.startswith("今日导读："):
-            close_paper_card()
-            html_lines.append(
-                f"<p style='margin:0 0 18px;padding:12px 14px;border-radius:10px;background:#fefce8;border:1px solid #fde68a;font-size:16px;font-weight:500;line-height:1.8'>{html.escape(striped)}</p>"
-            )
-        elif striped.startswith("分类标题："):
-            close_paper_card()
-            cat = striped.split("：", 1)[1]
-            html_lines.append(
-                f"<h2 style='font-size:34px;font-weight:850;line-height:1.25;margin:24px 0 12px;color:#0b132b;letter-spacing:0.1px'>{html.escape(cat)}</h2>"
-            )
-            html_lines.append("<hr style='border:none;border-top:1px solid #d7deea;margin:0 0 16px 0' />")
-        elif re.match(r"^论文\d+｜", striped):
-            close_paper_card()
-            in_paper = True
-            html_lines.append(
-                "<div style='border:1px solid rgba(148,163,184,.26);background:linear-gradient(180deg,rgba(15,23,42,.92),rgba(15,23,42,.78));padding:18px 18px 16px;margin:14px 0 20px;border-radius:14px;box-shadow:0 8px 26px rgba(2,8,23,.36);backdrop-filter: blur(2px);'>"
-            )
-            html_lines.append(
-                f"<h3 style='font-size:24px;font-weight:800;line-height:1.35;margin:0 0 10px;color:#ecf3ff'>{html.escape(striped)}</h3>"
-            )
-        elif striped.startswith("分隔线"):
-            close_paper_card()
-            html_lines.append("<hr style='border:none;border-top:1px solid rgba(148,163,184,.28);margin:18px 0' />")
-        elif striped.startswith("论文想解决什么问题、该问题为什么重要：") or striped.startswith("论文的核心方法是什么、和以前相比如何创新：") or striped.startswith("论文的核心结论：") or striped.startswith("论文的增量价值是什么、会带来什么影响：") or striped.startswith("论文的局限性和不确定性、没有解决什么问题："):
-            title, content = striped.split("：", 1)
-            html_lines.append(
-                f"<p style='margin:14px 0 6px;font-size:19px;font-weight:800;line-height:1.35;color:#8ed6ff'>{html.escape(title)}</p>"
-            )
-            html_lines.append(
-                f"<p style='margin:0 0 11px;font-size:17px;line-height:1.95;color:#dbe7ff'>{html.escape(content)}</p>"
-            )
-        else:
-            html_lines.append(f"<p style='margin:8px 0;font-size:17px;line-height:1.9;color:#dbe7ff'>{html.escape(striped)}</p>")
+              <div style='background:#F8FAFC;border:1px solid #E5E7EB;border-radius:12px;padding:12px 14px;margin-bottom:10px'>
+                <div style='font-size:14px;font-weight:600;color:#111827;margin-bottom:4px'>热点解析</div>
+                <div style='font-size:16px;line-height:1.7;color:#111827'>{html.escape(p.get('problem',''))}</div>
+              </div>
 
-    close_paper_card()
-    html_lines.append("</div></body></html>")
-    return "\n".join(html_lines)
+              <div style='background:#EFF6FF;border-left:3px solid #2563EB;border-radius:10px;padding:10px 12px;margin-bottom:10px'>
+                <div style='font-size:14px;font-weight:600;color:#1E3A8A;margin-bottom:2px'>Why it matters</div>
+                <div style='font-size:16px;line-height:1.7;color:#111827'>{html.escape(p.get('value',''))}</div>
+              </div>
+
+              <div style='font-size:16px;line-height:1.7;color:#111827;margin-bottom:6px'><span style='font-weight:600'>方法与结论：</span>{html.escape(p.get('method',''))} {html.escape(p.get('conclusion',''))}</div>
+              <div style='font-size:16px;line-height:1.7;color:#4B5563'><span style='font-weight:600'>局限与不确定性：</span>{html.escape(p.get('risk',''))}</div>
+            </td></tr>
+          </table>
+        </td></tr>
+        """)
+
+    summary_html = "".join(
+        f"<tr><td style='padding:0 0 10px 0'><table role='presentation' width='100%' cellspacing='0' cellpadding='0' style='background:#FFFFFF;border:1px solid #E5E7EB;border-radius:14px'><tr><td style='padding:16px 18px'><div style='font-size:14px;font-weight:600;color:#2563EB;margin-bottom:4px'>{html.escape(k)}</div><div style='font-size:16px;line-height:1.7;color:#111827'>{html.escape(v)}</div></td></tr></table></td></tr>"
+        for k, v in summary_cards
+    )
+
+    kpi_html = "".join(
+        f"<td valign='top' width='33.33%' style='padding:0 6px'><table role='presentation' width='100%' cellspacing='0' cellpadding='0' style='background:#F8FAFC;border:1px solid #E5E7EB;border-radius:12px;height:100%'><tr><td style='padding:14px 14px'><div style='font-size:13px;font-weight:600;color:#4B5563;margin-bottom:6px'>{html.escape(k)}</div><div style='font-size:16px;line-height:1.6;color:#111827;font-weight:600'>{html.escape(v)}</div></td></tr></table></td>"
+        for k, v in kpi_cards
+    )
+
+    return f"""
+<html>
+  <body style='margin:0;padding:0;background:#F5F7FA;font-family:Inter,SF Pro Display,PingFang SC,Microsoft YaHei,Arial,sans-serif;color:#111827'>
+    <table role='presentation' width='100%' cellspacing='0' cellpadding='0' style='background:#F5F7FA'>
+      <tr><td align='center' style='padding:24px 12px'>
+        <table role='presentation' width='720' cellspacing='0' cellpadding='0' style='width:720px;max-width:720px;background:#FFFFFF;border:1px solid #E5E7EB;border-radius:16px'>
+          <tr><td style='padding:32px'>
+
+            <table role='presentation' width='100%' cellspacing='0' cellpadding='0' style='background:#F8FAFC;border:1px solid #E5E7EB;border-radius:16px'>
+              <tr><td style='padding:24px'>
+                <div style='font-size:12px;font-weight:600;color:#2563EB;letter-spacing:.06em;text-transform:uppercase;margin-bottom:8px'>Internal Brief</div>
+                <div style='font-size:34px;line-height:1.2;font-weight:700;color:#111827;margin-bottom:8px'>{title}</div>
+                <div style='font-size:14px;color:#4B5563;margin-bottom:6px'>Auto-generated executive intelligence brief</div>
+                <div style='font-size:13px;color:#6B7280'>周期：{html.escape(period or '未披露')}</div>
+              </td></tr>
+            </table>
+
+            <div style='height:28px'></div>
+            <div style='font-size:24px;font-weight:700;color:#111827;margin-bottom:14px'>Executive Summary</div>
+            <table role='presentation' width='100%' cellspacing='0' cellpadding='0'>{summary_html}</table>
+
+            <div style='height:8px'></div>
+            <table role='presentation' width='100%' cellspacing='0' cellpadding='0'><tr>{kpi_html}</tr></table>
+
+            <div style='height:32px'></div>
+            <div style='font-size:24px;font-weight:700;color:#111827;margin-bottom:14px'>Top 3 Hot Events</div>
+            <table role='presentation' width='100%' cellspacing='0' cellpadding='0'>
+              {''.join(event_cards) if event_cards else "<tr><td style='font-size:16px;color:#4B5563'>本期暂无可展示事件。</td></tr>"}
+            </table>
+
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>
+""".strip()
 
 
 def build_daily_digest(client: OpenAI) -> Tuple[str, str]:
