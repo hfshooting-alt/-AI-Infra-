@@ -214,7 +214,8 @@ Agent 现在采用以下策略：
 ```bash
 python -m agent.official_monitor.main --sample \
   --json-out agent/official_monitor_sample.json \
-  --md-out agent/official_monitor_sample.md
+  --md-out agent/official_monitor_sample.md \
+  --html-out agent/official_monitor_sample.html
 ```
 
 在线运行（真实抓取）：
@@ -222,5 +223,8 @@ python -m agent.official_monitor.main --sample \
 python -m agent.official_monitor.main \
   --lookback-days 7 \
   --json-out agent/official_monitor_output.json \
-  --md-out agent/official_monitor_report.md
+  --md-out agent/official_monitor_report.md \
+  --html-out agent/official_monitor_report.html
 ```
+
+- 输出新增科技感 HTML 周报，适合邮件或浏览器阅读。

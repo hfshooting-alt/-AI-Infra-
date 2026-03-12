@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from .pipeline import run_pipeline, sample_run_data
-from .render import render_json, render_markdown
+from .render import render_html, render_json, render_markdown
 
 
 def main() -> None:
@@ -13,6 +13,7 @@ def main() -> None:
     parser.add_argument("--lookback-days", type=int, default=7)
     parser.add_argument("--json-out", default="agent/official_monitor_output.json")
     parser.add_argument("--md-out", default="agent/official_monitor_report.md")
+    parser.add_argument("--html-out", default="agent/official_monitor_report.html")
     parser.add_argument("--sample", action="store_true", help="Run with built-in sample data")
     args = parser.parse_args()
 
@@ -23,12 +24,15 @@ def main() -> None:
 
     out_json = render_json(summary, articles, clusters)
     out_md = render_markdown(summary, clusters)
+    out_html = render_html(summary, clusters)
 
     Path(args.json_out).write_text(json.dumps(out_json, ensure_ascii=False, indent=2), encoding="utf-8")
     Path(args.md_out).write_text(out_md, encoding="utf-8")
+    Path(args.html_out).write_text(out_html, encoding="utf-8")
 
     print(f"[OK] JSON written: {args.json_out}")
     print(f"[OK] Markdown written: {args.md_out}")
+    print(f"[OK] HTML written: {args.html_out}")
     print(f"[OK] topics={summary.topic_clusters}, deduped_articles={summary.deduped_articles}")
 
 

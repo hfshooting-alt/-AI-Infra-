@@ -92,6 +92,7 @@ def run_pipeline(lookback_days: int = 7, max_articles_per_source: int = 35) -> T
                     "published_at": a.published_at,
                     "article_summary_zh": a.article_summary_zh,
                     "source_link_markdown": link,
+                    "url": a.url,
                 }
             )
         topic_clusters.append(
@@ -147,7 +148,7 @@ def sample_run_data() -> Tuple[RunSummary, List[NormalizedArticle], List[TopicCl
         for a in cl:
             a.topic_cluster_id=m["topic_cluster_id"]
             a.article_summary_zh=summarize_article_zh(a)
-            sup.append({"article_id":a.article_id,"title":a.title,"institution_name":a.company_or_firm_name,"published_at":a.published_at,"article_summary_zh":a.article_summary_zh,"source_link_markdown":source_link_markdown(a.company_or_firm_name,a.url)})
+            sup.append({"article_id":a.article_id,"title":a.title,"institution_name":a.company_or_firm_name,"published_at":a.published_at,"article_summary_zh":a.article_summary_zh,"source_link_markdown":source_link_markdown(a.company_or_firm_name,a.url),"url":a.url})
         topic_clusters.append(TopicCluster(topic_cluster_id=m["topic_cluster_id"],topic_title=m["topic_title"],event_summary=ev,topic_keywords=m["topic_keywords"],strategic_signal=sig,article_count=len(cl),sources=sorted(list({a.company_or_firm_name for a in cl})),cluster_confidence_score=m["cluster_confidence_score"],topic_priority_score=m["topic_priority_score"],supporting_articles=sup))
     summary=RunSummary(started_at=now,finished_at=now,lookback_days=7,trusted_sources=35,covered_sources=3,fetched_articles=3,kept_articles=3,deduped_articles=len(ded),topic_clusters=len(topic_clusters),drop_reasons={})
     return summary,ded,topic_clusters
