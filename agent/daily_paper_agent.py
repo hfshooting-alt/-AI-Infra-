@@ -1287,10 +1287,31 @@ def to_html(report_text: str) -> str:
     lines = [ln.strip() for ln in report_text.splitlines() if ln.strip()]
 
     def pretty_text(val: str) -> str:
-        t = html.escape((val or "").strip())
-        t = re.sub(r"([。！？；])", r"\1<br/>", t)
-        t = re.sub(r"(<br/>)+$", "", t)
-        return t
+        raw = (val or "").strip()
+        if not raw:
+            return ""
+        pieces = [x.strip() for x in re.split(r"(?<=[。！？；])", raw) if x.strip()]
+        if not pieces:
+            pieces = [raw]
+        pieces = [html.escape(x) for x in pieces]
+        return "<br/><span style='color:#9CA3AF'>·</span> ".join(pieces)
+
+    def compact_author_line(author_raw: str) -> str:
+        txt = (author_raw or "").strip()
+        if not txt:
+            return "未披露"
+        matches = re.findall(r"([^,，（(]+)\s*[（(]([^）)]+)[）)]", txt)
+        if len(matches) >= 2:
+            insts = {inst.strip() for _, inst in matches if inst.strip()}
+            if len(insts) == 1:
+                names = [name.strip() for name, _ in matches if name.strip()]
+                if names:
+                    name_text = "、".join(names[:8])
+                    if len(names) > 8:
+                        name_text += "等"
+                    inst = next(iter(insts))
+                    return f"{name_text}（全部来自{inst}）"
+        return txt
 
     title = "AI Insight - Weekly Intelligence Digest"
     subtitle = "Stay Hungry, Stay Foolish!"
@@ -1379,27 +1400,27 @@ def to_html(report_text: str) -> str:
               <table role='presentation' width='100%' cellspacing='0' cellpadding='0' style='background:#FFFFFF;border:1px solid #E5E7EB;border-radius:16px;box-shadow:0 4px 16px rgba(15,23,42,0.04)'>
                 <tr><td style='padding:24px'>
                   <div style='font-size:19px;line-height:1.45;font-weight:700;color:#111827;margin-bottom:8px'>{html.escape(p.get('title',''))}</div>
-                  <div style='font-size:13px;color:#6B7280;line-height:1.7;margin-bottom:12px'>作者：{html.escape(p.get('author',''))} ｜ {link_html}</div>
+                  <div style='font-size:13px;color:#6B7280;line-height:1.7;margin-bottom:12px'>作者：{html.escape(compact_author_line(p.get('author','')))} ｜ {link_html}</div>
 
                   <div style='background:#F8FAFC;border:1px solid #E5E7EB;border-radius:12px;padding:12px 14px;margin-bottom:10px'>
-                    <div style='font-size:14px;font-weight:600;color:#111827;margin-bottom:4px'>论文想解决什么问题、该问题为什么重要</div>
-                    <div style='font-size:17px;line-height:1.82;color:#111827'>{pretty_text(p.get('problem',''))}</div>
+                    <div style='font-size:18px;font-weight:700;color:#111827;margin-bottom:8px'>论文想解决什么问题、该问题为什么重要</div>
+                    <div style='font-size:18px;line-height:1.9;color:#111827'>{pretty_text(p.get('problem',''))}</div>
                   </div>
                   <div style='background:#F8FAFC;border:1px solid #E5E7EB;border-radius:12px;padding:12px 14px;margin-bottom:10px'>
-                    <div style='font-size:14px;font-weight:600;color:#111827;margin-bottom:4px'>论文的核心方法是什么、和以前相比如何创新</div>
-                    <div style='font-size:17px;line-height:1.82;color:#111827'>{pretty_text(p.get('method',''))}</div>
+                    <div style='font-size:18px;font-weight:700;color:#111827;margin-bottom:8px'>论文的核心方法是什么、和以前相比如何创新</div>
+                    <div style='font-size:18px;line-height:1.9;color:#111827'>{pretty_text(p.get('method',''))}</div>
                   </div>
                   <div style='background:#F8FAFC;border:1px solid #E5E7EB;border-radius:12px;padding:12px 14px;margin-bottom:10px'>
-                    <div style='font-size:14px;font-weight:600;color:#111827;margin-bottom:4px'>论文的核心结论</div>
-                    <div style='font-size:17px;line-height:1.82;color:#111827'>{pretty_text(p.get('conclusion',''))}</div>
+                    <div style='font-size:18px;font-weight:700;color:#111827;margin-bottom:8px'>论文的核心结论</div>
+                    <div style='font-size:18px;line-height:1.9;color:#111827'>{pretty_text(p.get('conclusion',''))}</div>
                   </div>
                   <div style='background:#F8FAFC;border:1px solid #E5E7EB;border-radius:12px;padding:12px 14px;margin-bottom:10px'>
-                    <div style='font-size:14px;font-weight:600;color:#111827;margin-bottom:4px'>论文的增量价值是什么、会带来什么影响</div>
-                    <div style='font-size:17px;line-height:1.82;color:#111827'>{pretty_text(p.get('value',''))}</div>
+                    <div style='font-size:18px;font-weight:700;color:#111827;margin-bottom:8px'>论文的增量价值是什么、会带来什么影响</div>
+                    <div style='font-size:18px;line-height:1.9;color:#111827'>{pretty_text(p.get('value',''))}</div>
                   </div>
                   <div style='background:#F8FAFC;border:1px solid #E5E7EB;border-radius:12px;padding:12px 14px'>
-                    <div style='font-size:14px;font-weight:600;color:#111827;margin-bottom:4px'>论文的局限性和不确定性、没有解决什么问题</div>
-                    <div style='font-size:17px;line-height:1.82;color:#111827'>{pretty_text(p.get('risk',''))}</div>
+                    <div style='font-size:18px;font-weight:700;color:#111827;margin-bottom:8px'>论文的局限性和不确定性、没有解决什么问题</div>
+                    <div style='font-size:18px;line-height:1.9;color:#111827'>{pretty_text(p.get('risk',''))}</div>
                   </div>
                 </td></tr>
               </table>
