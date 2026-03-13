@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+import os
+from urllib.parse import urlparse
+
 from .models import SourceConfig
 
 # Initial production registry (official sources only)
@@ -10,7 +14,7 @@ TRUSTED_SOURCE_REGISTRY = [
   {"source_name":"Google DeepMind News","source_type":"ai_company","region":"global","official_domain":"deepmind.google","landing_url":"https://deepmind.google/blog/","allowed_domains":["deepmind.google"],"candidate_paths":["/blog/"],"parser_hint":"listing_page","language":"en","priority":1,"exclude_url_patterns":["/careers"],"notes":"Primary DeepMind news hub"},
   {"source_name":"Meta AI Blog","source_type":"ai_company","region":"global","official_domain":"ai.meta.com","landing_url":"https://ai.meta.com/blog/","allowed_domains":["ai.meta.com"],"candidate_paths":["/blog/","/research/"],"parser_hint":"listing_page","language":"en","priority":1,"exclude_url_patterns":["/research/"],"notes":"Use blog for announcements; research index is optional"},
   {"source_name":"xAI News","source_type":"ai_company","region":"global","official_domain":"x.ai","landing_url":"https://x.ai/news","allowed_domains":["x.ai"],"candidate_paths":["/news"],"parser_hint":"listing_page","language":"en","priority":1,"exclude_url_patterns":["/careers","/shop"],"notes":"Official xAI news feed"},
-  {"source_name":"Microsoft AI Blog","source_type":"ai_company","region":"global","official_domain":"blogs.microsoft.com","landing_url":"https://blogs.microsoft.com/ai/","allowed_domains":["blogs.microsoft.com"],"candidate_paths":["/ai/","/blog/"],"parser_hint":"category_archive","language":"en","priority":2,"exclude_url_patterns":["/careers"],"notes":"Official Microsoft AI blog/archive area"},
+  {"source_name":"Microsoft AI Blog","source_type":"ai_company","region":"global","official_domain":"news.microsoft.com","landing_url":"https://news.microsoft.com/source/topics/ai/","allowed_domains":["news.microsoft.com"],"candidate_paths":["/source/topics/ai/","/source/topics/"],"parser_hint":"category_archive","language":"en","priority":2,"exclude_url_patterns":["/careers"],"notes":"Official Microsoft AI news topic page"},
   {"source_name":"NVIDIA Blog","source_type":"ai_company","region":"global","official_domain":"blogs.nvidia.com","landing_url":"https://blogs.nvidia.com/","allowed_domains":["blogs.nvidia.com"],"candidate_paths":["/","/blog/tag/artificial-intelligence/"],"parser_hint":"listing_page","language":"en","priority":1,"exclude_url_patterns":[],"notes":"Corporate NVIDIA blog"},
   {"source_name":"NVIDIA Technical Blog","source_type":"ai_company","region":"global","official_domain":"developer.nvidia.com","landing_url":"https://developer.nvidia.com/blog/","allowed_domains":["developer.nvidia.com"],"candidate_paths":["/blog/"],"parser_hint":"listing_page","language":"en","priority":2,"exclude_url_patterns":["/forums/"],"notes":"Technical AI/developer content"},
   {"source_name":"AWS Machine Learning Blog","source_type":"ai_company","region":"global","official_domain":"aws.amazon.com","landing_url":"https://aws.amazon.com/blogs/machine-learning/","allowed_domains":["aws.amazon.com"],"candidate_paths":["/blogs/machine-learning/","/blogs/aws/category/artificial-intelligence/amazon-machine-learning/"],"parser_hint":"listing_page","language":"en","priority":2,"exclude_url_patterns":["/careers"],"notes":"Official AWS ML / GenAI blog"},
@@ -34,12 +38,39 @@ TRUSTED_SOURCE_REGISTRY = [
   {"source_name":"General Catalyst Stories","source_type":"investment_firm","region":"global","official_domain":"generalcatalyst.com","landing_url":"https://www.generalcatalyst.com/stories","allowed_domains":["www.generalcatalyst.com","generalcatalyst.com"],"candidate_paths":["/stories","/worldview"],"parser_hint":"sectioned_listing_page","language":"en","priority":1,"exclude_url_patterns":["/portfolio","/team"],"notes":"News & content"},
   {"source_name":"Menlo Ventures Perspective","source_type":"investment_firm","region":"global","official_domain":"menlovc.com","landing_url":"https://menlovc.com/perspective/","allowed_domains":["menlovc.com"],"candidate_paths":["/perspective/"],"parser_hint":"listing_page","language":"en","priority":1,"exclude_url_patterns":["/portfolio/"],"notes":"Official Menlo perspective hub"},
   {"source_name":"Atomico Insights","source_type":"investment_firm","region":"global","official_domain":"atomico.com","landing_url":"https://atomico.com/insights","allowed_domains":["atomico.com"],"candidate_paths":["/insights"],"parser_hint":"listing_page","language":"en","priority":2,"exclude_url_patterns":["/team/","/portfolio/"],"notes":"Official Atomico insights"},
-  {"source_name":"Sapphire Ventures Blog","source_type":"investment_firm","region":"global","official_domain":"sapphireventures.com","landing_url":"https://sapphireventures.com/blog/","allowed_domains":["sapphireventures.com"],"candidate_paths":["/blog/","/perspectives/"],"parser_hint":"listing_page","language":"en","priority":2,"exclude_url_patterns":["/portfolio/"],"notes":"Official Sapphire content hub"},
+  {"source_name":"Sapphire Ventures Blog","source_type":"investment_firm","region":"global","official_domain":"sapphireventures.com","landing_url":"https://sapphireventures.com/perspectives/","allowed_domains":["sapphireventures.com"],"candidate_paths":["/blog/","/perspectives/"],"parser_hint":"listing_page","language":"en","priority":2,"exclude_url_patterns":["/portfolio/"],"notes":"Official Sapphire content hub"},
   {"source_name":"Hillhouse News","source_type":"investment_firm","region":"cn","official_domain":"hillhouseinvestment.com","landing_url":"https://www.hillhouseinvestment.com/news/","allowed_domains":["www.hillhouseinvestment.com","hillhouseinvestment.com"],"candidate_paths":["/news/"],"parser_hint":"listing_page","language":"en","priority":1,"exclude_url_patterns":["/team/","/our-heritage/"],"notes":"Official Hillhouse News"},
-  {"source_name":"Qiming Newsroom","source_type":"investment_firm","region":"cn","official_domain":"qimingvc.com","landing_url":"https://www.qimingvc.com/cn/newsroom?page=2","allowed_domains":["www.qimingvc.com","qimingvc.com"],"candidate_paths":["/cn/newsroom"],"parser_hint":"listing_page_with_pagination","language":"zh","priority":1,"exclude_url_patterns":["/team/","/portfolio/"],"notes":"Official Qiming newsroom"},
-  {"source_name":"HSG News & Insights","source_type":"investment_firm","region":"cn","official_domain":"hsgcap.com","landing_url":"https://www.hsgcap.com/","allowed_domains":["www.hsgcap.com","hsgcap.com","hongshan.com"],"candidate_paths":["/"],"parser_hint":"homepage_story_cards","language":"en","priority":1,"exclude_url_patterns":["/jobs/","/team/"],"notes":"Official HSG homepage"}
+  {"source_name":"Qiming Newsroom","source_type":"investment_firm","region":"cn","official_domain":"qimingvc.com","landing_url":"https://www.qimingvc.com/cn/newsroom","allowed_domains":["www.qimingvc.com","qimingvc.com"],"candidate_paths":["/cn/newsroom"],"parser_hint":"listing_page_with_pagination","language":"zh","priority":1,"exclude_url_patterns":["/team/","/portfolio/"],"notes":"Official Qiming newsroom"},
+  {"source_name":"HSG News & Insights","source_type":"investment_firm","region":"cn","official_domain":"hsgcap.com","landing_url":"https://www.hsgcap.com/insights-and-news/","allowed_domains":["www.hsgcap.com","hsgcap.com","hongshan.com"],"candidate_paths":["/insights-and-news/","/"],"parser_hint":"homepage_story_cards","language":"en","priority":1,"exclude_url_patterns":["/jobs/","/team/"],"notes":"Official HSG insights and news"}
 ]
 
 
 def load_sources() -> list[SourceConfig]:
-    return [SourceConfig(**item) for item in TRUSTED_SOURCE_REGISTRY]
+    override_raw = os.environ.get("OFFICIAL_SOURCE_REGISTRY_JSON", "").strip()
+    registry = [dict(item) for item in TRUSTED_SOURCE_REGISTRY]
+
+    if override_raw:
+        try:
+            override_items = json.loads(override_raw)
+            if isinstance(override_items, list):
+                override_map = {
+                    str(item.get("name", "")).strip(): str(item.get("url", "")).strip()
+                    for item in override_items
+                    if isinstance(item, dict)
+                }
+                for item in registry:
+                    source_name = item.get("source_name", "")
+                    if source_name in override_map and override_map[source_name]:
+                        new_url = override_map[source_name]
+                        parsed = urlparse(new_url)
+                        host = parsed.netloc.lower()
+                        item["landing_url"] = new_url
+                        if host:
+                            item["official_domain"] = host
+                            allowed = set(item.get("allowed_domains") or [])
+                            allowed.add(host)
+                            item["allowed_domains"] = sorted(allowed)
+        except json.JSONDecodeError:
+            pass
+
+    return [SourceConfig(**item) for item in registry]
