@@ -104,6 +104,20 @@ PHYSICAL_AI_CONTEXT_KEYWORDS = [
     "world model", "world simulator", "digital twin", "具身", "机器人", "自动驾驶", "导航", "操作", "感知", "仿真",
 ]
 
+
+FOCUS_BUSINESS_KEYWORDS = [
+    "3d perception", "3d sensing", "3d reconstruction", "3d modeling", "3d simulation", "point cloud", "lidar",
+    "depth estimation", "slam", "neural rendering", "gaussian splatting", "occupancy", "bev", "sensor fusion",
+    "physical ai", "embodied ai", "embodied intelligence", "robot learning", "sim2real", "autonomous driving",
+    "3d感知", "三维感知", "三维建模", "3d建模", "点云", "激光雷达", "传感器融合", "物理智能", "具身智能",
+    "机器人学习", "自动驾驶", "仿真", "数字孪生",
+]
+
+WEAK_DOMAIN_EXCLUDE_KEYWORDS = [
+    "condition monitoring", "mechanical fault", "impeller", "bearing fault", "corrosion", "pump failure",
+    "predictive maintenance", "iot-enabled", "叶轮", "腐蚀", "机油", "盐水", "故障诊断",
+]
+
 RSS_SOURCES = {
     "Nature": "https://www.nature.com/nature.rss",
     "Science": "https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=science",
@@ -265,14 +279,22 @@ def is_domain_relevant(title: str, abstract: str) -> bool:
     infra_hit = sum(1 for kw in INFRA_STRICT_KEYWORDS if normalize(kw) in hay)
     tech_hit = sum(1 for kw in INVESTMENT_TECH_KEYWORDS if normalize(kw) in hay)
     physical_ai_hit = sum(1 for kw in PHYSICAL_AI_CONTEXT_KEYWORDS if normalize(kw) in hay)
+    focus_hit = sum(1 for kw in FOCUS_BUSINESS_KEYWORDS if normalize(kw) in hay)
+    weak_exclude_hit = sum(1 for kw in WEAK_DOMAIN_EXCLUDE_KEYWORDS if normalize(kw) in hay)
     excluded = any(normalize(kw) in hay for kw in EXCLUDED_NON_TECH_KEYWORDS)
     penalty = sum(1 for kw in IRRELEVANT_HINT_KEYWORDS if normalize(kw) in hay)
 
     if excluded or penalty >= 1:
         return False
 
-    world_ok = world_anchor_hit >= 1 and (world_hit + tech_hit + physical_ai_hit) >= 3
-    infra_ok = infra_anchor_hit >= 1 and physical_ai_hit >= 1 and (infra_hit + tech_hit) >= 3
+    world_ok = world_anchor_hit >= 1 and (world_hit + tech_hit + physical_ai_hit + focus_hit) >= 4
+    infra_ok = infra_anchor_hit >= 1 and physical_ai_hit >= 1 and (infra_hit + tech_hit + focus_hit) >= 4
+
+    if focus_hit <= 0:
+        return False
+    if weak_exclude_hit >= 2 and focus_hit < 2:
+        return False
+
     return world_ok or infra_ok
 
 

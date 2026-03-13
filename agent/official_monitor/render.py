@@ -180,7 +180,8 @@ def render_markdown(run_summary: RunSummary, clusters: List[TopicCluster]) -> st
 
 
 def render_html_fragment(run_summary: RunSummary, clusters: List[TopicCluster]) -> str:
-    selected = sorted(clusters, key=lambda c: (c.topic_priority_score, c.article_count), reverse=True)[:6]
+    selected = sorted(clusters, key=lambda c: (c.topic_priority_score, c.article_count), reverse=True)
+    selected = selected[:4]
     if not selected:
         return (
             "<table role='presentation' width='100%' cellspacing='0' cellpadding='0' style='margin-top:28px'>"
@@ -195,17 +196,55 @@ def render_html_fragment(run_summary: RunSummary, clusters: List[TopicCluster]) 
     def theme_lead(c: TopicCluster) -> str:
         return c.strategic_signal or ""
 
+    def format_summary_lines(text: str) -> str:
+        t = escape((text or "").strip())
+        t = t.replace(" 关键信号：", "<br/>关键信号：")
+        t = t.replace(" 涉及主体：", "<br/>涉及主体：")
+        return t
+
+    def pick_supporting_articles(items: list[dict], limit: int = 6) -> list[dict]:
+        picked: list[dict] = []
+        used: set[str] = set()
+        for a in items:
+            inst = str(a.get("institution_name", "")).strip().lower()
+            if inst and inst not in used:
+                picked.append(a)
+                used.add(inst)
+            if len(picked) >= limit:
+                return picked
+        for a in items:
+            if a not in picked:
+                picked.append(a)
+            if len(picked) >= limit:
+                break
+        return picked
+
+    # target total news cards in weekly section: 7-12 when enough data
+    total_available = sum(len(c.supporting_articles) for c in selected)
+    target_total = min(12, max(7, total_available)) if total_available >= 7 else total_available
+    per_theme_quota = {i: 1 for i in range(len(selected))}
+    remaining = max(0, target_total - len(selected))
+    idx = 0
+    while remaining > 0 and selected:
+        i = idx % len(selected)
+        if per_theme_quota[i] < len(selected[i].supporting_articles):
+            per_theme_quota[i] += 1
+            remaining -= 1
+        idx += 1
+        if idx > 400:
+            break
+
     theme_blocks = []
-    for c in selected:
+    for i, c in enumerate(selected):
         article_cards = []
-        for a in c.supporting_articles[:3]:
+        for a in pick_supporting_articles(c.supporting_articles, limit=per_theme_quota.get(i, 1)):
             article_cards.append(
                 f"""
                 <tr><td style='padding:0 0 10px 0'>
                   <table role='presentation' width='100%' cellspacing='0' cellpadding='0' style='background:#FFFFFF;border:1px solid #E5E7EB;border-radius:12px;box-shadow:0 1px 6px rgba(15,23,42,0.03)'>
                     <tr><td style='padding:14px 14px 12px'>
                       <div style='font-size:19px;line-height:1.45;font-weight:700;color:#111827;margin-bottom:6px'>{escape(a.get('title',''))}</div>
-                      <div style='font-size:16px;line-height:1.7;color:#111827;margin-bottom:8px'>{escape(a.get('article_summary_zh',''))}</div>
+                      <div style='font-size:16px;line-height:1.7;color:#111827;margin-bottom:8px'>{format_summary_lines(a.get('article_summary_zh',''))}</div>
                       <div style='font-size:13px;line-height:1.6;color:#4B5563'>来源：<a href='{escape(a.get('url',''))}' style='color:#2563EB;text-decoration:none'>@{escape(a.get('institution_name','官方来源'))}（原文链接）</a></div>
                     </td></tr>
                   </table>
