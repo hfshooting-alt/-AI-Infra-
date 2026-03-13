@@ -279,34 +279,7 @@ def topical_score(title: str, abstract: str) -> int:
 
 
 def is_domain_relevant(title: str, abstract: str) -> bool:
-    hay = normalize(f"{title} {abstract}")
-    world_anchor_hit = sum(1 for kw in CORE_WORLD_ANCHORS if normalize(kw) in hay)
-    infra_anchor_hit = sum(1 for kw in CORE_INFRA_ANCHORS if normalize(kw) in hay)
-    world_hit = sum(1 for kw in WORLD_STRICT_KEYWORDS if normalize(kw) in hay)
-    infra_hit = sum(1 for kw in INFRA_STRICT_KEYWORDS if normalize(kw) in hay)
-    tech_hit = sum(1 for kw in INVESTMENT_TECH_KEYWORDS if normalize(kw) in hay)
-    physical_ai_hit = sum(1 for kw in PHYSICAL_AI_CONTEXT_KEYWORDS if normalize(kw) in hay)
-    focus_hit = sum(1 for kw in FOCUS_BUSINESS_KEYWORDS if normalize(kw) in hay)
-    strong_focus_hit = sum(1 for kw in STRONG_FOCUS_KEYWORDS if normalize(kw) in hay)
-    weak_exclude_hit = sum(1 for kw in WEAK_DOMAIN_EXCLUDE_KEYWORDS if normalize(kw) in hay)
-    excluded = any(normalize(kw) in hay for kw in EXCLUDED_NON_TECH_KEYWORDS)
-    penalty = sum(1 for kw in IRRELEVANT_HINT_KEYWORDS if normalize(kw) in hay)
-
-    if excluded or penalty >= 1:
-        return False
-
-    world_ok = world_anchor_hit >= 1 and (world_hit + tech_hit + physical_ai_hit + focus_hit) >= 4
-    infra_ok = infra_anchor_hit >= 1 and physical_ai_hit >= 1 and (infra_hit + tech_hit + focus_hit) >= 4
-
-    if strong_focus_hit <= 0:
-        return False
-    if weak_exclude_hit >= 1:
-        return False
-
-    return world_ok or infra_ok
-
-
-def is_domain_relevant_soft(title: str, abstract: str) -> bool:
+    """Strict but simple: lock on world-model / infra + physical-3D focus."""
     hay = normalize(f"{title} {abstract}")
     if any(normalize(kw) in hay for kw in EXCLUDED_NON_TECH_KEYWORDS):
         return False
@@ -315,14 +288,22 @@ def is_domain_relevant_soft(title: str, abstract: str) -> bool:
     if sum(1 for kw in WEAK_DOMAIN_EXCLUDE_KEYWORDS if normalize(kw) in hay) >= 1:
         return False
 
-    world_anchor_hit = sum(1 for kw in CORE_WORLD_ANCHORS if normalize(kw) in hay)
-    infra_anchor_hit = sum(1 for kw in CORE_INFRA_ANCHORS if normalize(kw) in hay)
-    world_hit = sum(1 for kw in WORLD_STRICT_KEYWORDS if normalize(kw) in hay)
-    infra_hit = sum(1 for kw in INFRA_STRICT_KEYWORDS if normalize(kw) in hay)
-    physical_ai_hit = sum(1 for kw in PHYSICAL_AI_CONTEXT_KEYWORDS if normalize(kw) in hay)
-    strong_focus_hit = sum(1 for kw in STRONG_FOCUS_KEYWORDS if normalize(kw) in hay)
+    core_hit = sum(1 for kw in (CORE_WORLD_ANCHORS + CORE_INFRA_ANCHORS) if normalize(kw) in hay)
+    focus_hit = sum(1 for kw in FOCUS_BUSINESS_KEYWORDS if normalize(kw) in hay)
+    physical_hit = sum(1 for kw in PHYSICAL_AI_CONTEXT_KEYWORDS if normalize(kw) in hay)
 
-    return strong_focus_hit >= 1 and (world_anchor_hit + infra_anchor_hit + world_hit + infra_hit + physical_ai_hit) >= 2
+    return (core_hit >= 1 and (focus_hit + physical_hit) >= 2) or focus_hit >= 2
+
+
+def is_domain_relevant_soft(title: str, abstract: str) -> bool:
+    hay = normalize(f"{title} {abstract}")
+    if any(normalize(kw) in hay for kw in EXCLUDED_NON_TECH_KEYWORDS):
+        return False
+    if sum(1 for kw in IRRELEVANT_HINT_KEYWORDS if normalize(kw) in hay) >= 1:
+        return False
+    core_hit = sum(1 for kw in (CORE_WORLD_ANCHORS + CORE_INFRA_ANCHORS) if normalize(kw) in hay)
+    focus_hit = sum(1 for kw in FOCUS_BUSINESS_KEYWORDS if normalize(kw) in hay)
+    return core_hit >= 1 or focus_hit >= 1
 
 
 def fetch_arxiv() -> List[Paper]:
@@ -592,7 +573,20 @@ def dedup_rank(papers: Iterable[Paper]) -> List[Paper]:
     if soft_filtered:
         print(f"[WARN] strict domain filter kept {len(strict_filtered)} papers; relaxed fallback kept {len(soft_filtered)}")
         soft_filtered.sort(key=lambda x: (topical_score(x.title, x.abstract), x.published), reverse=True)
-        return soft_filtered
+        if len(soft_filtered) >= 3:
+            return soft_filtered
+
+    # final fallback: keep strongly topical papers while still removing clearly irrelevant ones
+    fallback = [
+        p for p in dedup.values()
+        if topical_score(p.title, p.abstract) > 0
+        and not any(normalize(k) in normalize(f"{p.title} {p.abstract}") for k in EXCLUDED_NON_TECH_KEYWORDS)
+        and sum(1 for k in IRRELEVANT_HINT_KEYWORDS if normalize(k) in normalize(f"{p.title} {p.abstract}")) == 0
+    ]
+    fallback.sort(key=lambda x: (topical_score(x.title, x.abstract), x.published), reverse=True)
+    if fallback:
+        print(f"[WARN] fallback topical selection enabled; candidates={len(fallback)}")
+        return fallback
 
     strict_filtered.sort(key=lambda x: (topical_score(x.title, x.abstract), x.published), reverse=True)
     return strict_filtered
@@ -1293,8 +1287,8 @@ def to_html(report_text: str) -> str:
         pieces = [x.strip() for x in re.split(r"(?<=[。！？；])", raw) if x.strip()]
         if not pieces:
             pieces = [raw]
-        pieces = [html.escape(x) for x in pieces]
-        return "<br/><span style='color:#9CA3AF'>·</span> ".join(pieces)
+        items = "".join([f"<li style='margin:0 0 8px 0'>{html.escape(x)}</li>" for x in pieces])
+        return f"<ul style='margin:0;padding-left:22px'>{items}</ul>"
 
     def compact_author_line(author_raw: str) -> str:
         txt = (author_raw or "").strip()
@@ -1493,13 +1487,21 @@ def build_daily_digest(client: OpenAI) -> Tuple[str, str]:
         cleaned = clean_symbols(text)
         return cleaned, to_html(cleaned)
 
-    selected = pick_top_discussed_papers(
-        diversify_sources(
-            sorted(papers, key=ranking_score, reverse=True),
-            int(os.environ.get("MAX_PAPERS", "18")),
-        ),
-        limit=3,
+    candidate_pool = diversify_sources(
+        sorted(papers, key=ranking_score, reverse=True),
+        int(os.environ.get("MAX_PAPERS", "18")),
     )
+    selected = pick_top_discussed_papers(candidate_pool, limit=3)
+    if len(selected) < 3:
+        selected_titles = {p.title for p in selected}
+        for p in candidate_pool:
+            if p.title in selected_titles:
+                continue
+            selected.append(p)
+            selected_titles.add(p.title)
+            if len(selected) >= 3:
+                break
+    selected = selected[:3]
 
     analyzed: List[AnalyzedPaper] = []
     parsed_map: Dict[str, Dict[str, str]] = {}

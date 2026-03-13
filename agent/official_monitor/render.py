@@ -179,9 +179,40 @@ def render_markdown(run_summary: RunSummary, clusters: List[TopicCluster]) -> st
     return "\n".join(lines).strip() + "\n"
 
 
+
+
+def merge_same_title_topics(clusters: List[TopicCluster]) -> List[TopicCluster]:
+    merged: List[TopicCluster] = []
+    by_title: dict[str, TopicCluster] = {}
+    for c in clusters:
+        key = (c.topic_title or "").strip().lower()
+        if not key:
+            merged.append(c)
+            continue
+        if key not in by_title:
+            by_title[key] = c
+            merged.append(c)
+            continue
+        base = by_title[key]
+        base.article_count += c.article_count
+        base.sources = sorted(list(set(base.sources + c.sources)))
+        base.topic_keywords = list(dict.fromkeys(base.topic_keywords + c.topic_keywords))[:8]
+        base.supporting_articles = (base.supporting_articles + c.supporting_articles)
+        if c.topic_priority_score > base.topic_priority_score:
+            base.topic_priority_score = c.topic_priority_score
+        if c.cluster_confidence_score > base.cluster_confidence_score:
+            base.cluster_confidence_score = c.cluster_confidence_score
+        if c.event_summary and c.event_summary not in (base.event_summary or ""):
+            base.event_summary = (base.event_summary + "；" + c.event_summary).strip("；")
+        if c.strategic_signal and c.strategic_signal not in (base.strategic_signal or ""):
+            base.strategic_signal = (base.strategic_signal + "；" + c.strategic_signal).strip("；")
+    return merged
+
+
 def render_html_fragment(run_summary: RunSummary, clusters: List[TopicCluster]) -> str:
     selected = sorted(clusters, key=lambda c: (c.topic_priority_score, c.article_count), reverse=True)
-    selected = selected[:4]
+    selected = merge_same_title_topics(selected)
+    selected = sorted(selected, key=lambda c: (c.topic_priority_score, c.article_count), reverse=True)[:4]
     if not selected:
         return (
             "<table role='presentation' width='100%' cellspacing='0' cellpadding='0' style='margin-top:28px'>"
@@ -273,12 +304,12 @@ def render_html_fragment(run_summary: RunSummary, clusters: List[TopicCluster]) 
     return f"""
     <table role='presentation' width='100%' cellspacing='0' cellpadding='0' style='margin-top:32px'>
       <tr><td style='background:#FFFFFF;border:1px solid #E5E7EB;border-radius:16px;padding:24px'>
-        <div style='font-size:12px;font-weight:600;color:#2563EB;letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px;text-align:center'>Weekly Brief</div>
+        <div style='font-size:13px;font-weight:600;color:#2563EB;letter-spacing:.06em;text-transform:uppercase;margin-bottom:8px;text-align:center'>Weekly Brief</div>
         <div style='font-size:28px;line-height:1.25;font-weight:700;color:#111827;margin-bottom:10px;text-align:center'>本周 AI 官方信号图谱</div>
         <div style='font-size:17px;line-height:1.7;color:#4B5563;margin-bottom:14px;text-align:center'>来自 AI 大厂与投资机构官网的主题归纳</div>
         <div style='background:#EFF6FF;border:1px solid #DBEAFE;border-radius:12px;padding:12px 14px;margin-bottom:16px'>
-          <div style='font-size:14px;font-weight:600;color:#1E3A8A;margin-bottom:3px'>本周判断</div>
-          <div style='font-size:16px;line-height:1.7;color:#111827'>{escape(weekly_judgment)}</div>
+          <div style='font-size:18px;font-weight:700;color:#111827;margin-bottom:6px'>本周判断</div>
+          <div style='font-size:16px;line-height:1.8;color:#111827'>{escape(weekly_judgment)}</div>
         </div>
         <table role='presentation' width='100%' cellspacing='0' cellpadding='0'>
           {''.join(theme_blocks)}
