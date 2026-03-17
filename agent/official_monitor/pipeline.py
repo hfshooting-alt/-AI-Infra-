@@ -21,6 +21,7 @@ from .summarize import (
     summarize_article_with_llm,
     summarize_cluster_event_zh,
     summarize_with_llm,
+    summarize_cluster_bundle_with_llm,
 )
 
 
@@ -65,12 +66,12 @@ def _passes_signal_gate(article: NormalizedArticle) -> bool:
 
 
 AI_COMPANY_MUST = [
-    "launch", "release", "announce", "debut", "rollout", "ga", "general availability",
-    "发布", "上线", "推出", "开源", "发布会", "升级", "新版本",
+    "launch", "release", "announce", "debut", "rollout", "ga", "general availability", "new model", "foundation model", "api", "core feature",
+    "发布", "上线", "推出", "开源", "发布会", "升级", "新版本", "新模型", "核心功能", "模型",
 ]
 AI_COMPANY_PR_NOISE = [
     "using", "how to", "customer story", "case study", "best practices", "tutorial", "webinar", "spotlight",
-    "hospital automation", "industry stories", "观点", "观察", "实践分享", "案例", "教程", "直播", "活动回顾", "周报", "月报",
+    "hospital automation", "industry stories", "customer success", "opinion", "keynote", "vision", "roadmap talk", "观点", "观察", "实践分享", "案例", "教程", "直播", "活动回顾", "周报", "月报",
 ]
 INVESTMENT_BIG_EVENT = [
     "funding", "financing", "investment", "invested", "acquisition", "merger", "portfolio", "appoint", "joins as", "ceo", "cfo", "partner",
@@ -133,7 +134,7 @@ def _extract_company_name(article: NormalizedArticle) -> str:
 
 
 def _passes_role_specific_gate(article: NormalizedArticle) -> bool:
-    txt = f"{article.title} {(article.content_text or '')[:2200]}".lower()
+    txt = f"{article.title} {(article.article_summary_zh or '')} {(article.summary or '')} {(article.content_text or '')[:2200]}".lower()
     st = (article.source_type or '').strip().lower()
     sig = (article.signal_type or '').strip().lower()
 
@@ -344,15 +345,7 @@ def run_pipeline(lookback_days: int = 7, max_articles_per_source: int = 35) -> T
             if not art.content_text:
                 drop_reasons["empty_content"] += 1
                 continue
-            if not _passes_signal_gate(art):
-                drop_reasons["low_signal_content"] += 1
-                continue
-            if not _passes_role_specific_gate(art):
-                drop_reasons["role_specific_filtered"] += 1
-                continue
-
-            art.summary = _build_precluster_summary(art)
-            art.related_entities = infer_entities(art)
+            # Step-2 first: keep all parsed news and build structured paragraphs later.
             raw_articles.append(art)
             article_idx += 1
             kept_here += 1
@@ -363,13 +356,33 @@ def run_pipeline(lookback_days: int = 7, max_articles_per_source: int = 35) -> T
     deduped = dedupe_articles(raw_articles)
     _log("dedupe_complete", before=len(raw_articles), after=len(deduped))
 
+    # Step-2: traverse all deduped news and output structured paragraph first.
     for a in deduped:
+        a.article_summary_zh = summarize_article_with_llm(a) or summarize_article_zh(a)
         if not (a.summary or "").strip():
             a.summary = _build_precluster_summary(a)
+        a.related_entities = infer_entities(a)
 
-    _log("cluster_input_ready", events=len(deduped))
+    # Step-3: strict cleaning on structured paragraphs.
+    cleaned: List[NormalizedArticle] = []
+    for a in deduped:
+        if not _passes_signal_gate(a):
+            drop_reasons["low_signal_content"] += 1
+            continue
+        if not _passes_role_specific_gate(a):
+            drop_reasons["role_specific_filtered"] += 1
+            continue
+        # Enforce investment hard requirements: target/amount/sector extraction present.
+        if (a.source_type or '').strip().lower() == 'investment_firm':
+            sm = a.summary or ''
+            if ('target=' not in sm) or ('amount=' not in sm) or ('sector=' not in sm):
+                drop_reasons["investment_fields_missing"] += 1
+                continue
+        cleaned.append(a)
 
-    clusters_raw = cluster_articles(deduped)
+    _log("cluster_input_ready", events=len(cleaned), deduped=len(deduped))
+
+    clusters_raw = cluster_articles(cleaned)
     clusters_raw = _merge_small_clusters(clusters_raw, min_cluster_size=2)
     clusters_raw = _rebalance_cluster_count(clusters_raw, min_topics=2, max_topics=4)
     _log("cluster_counts", clusters=len(clusters_raw), events=sum(len(c) for c in clusters_raw))
@@ -378,21 +391,31 @@ def run_pipeline(lookback_days: int = 7, max_articles_per_source: int = 35) -> T
     used_topic_titles: set[str] = set()
     for idx, cl in enumerate(clusters_raw, start=1):
         meta = build_topic_meta(cl, idx)
+        bundle = summarize_cluster_bundle_with_llm(cl, meta["topic_keywords"])
+        if bundle:
+            llm_title, event_summary, strategic_signal = bundle
+            if llm_title:
+                meta["topic_title"] = llm_title
+        else:
+            llm_cluster_summary = summarize_with_llm(cl, meta["topic_keywords"])
+            if llm_cluster_summary:
+                event_summary, strategic_signal = llm_cluster_summary
+            else:
+                event_summary, strategic_signal = summarize_cluster_event_zh(cl, meta["topic_keywords"])
+
+        # Final title de-dup after all title generation (including GPT title).
         t = str(meta.get("topic_title") or "").strip()
         if t in used_topic_titles:
             kw = next((k for k in (meta.get("topic_keywords") or []) if k), "综合")
             inst = next((a.company_or_firm_name for a in cl if a.company_or_firm_name), "多机构")
             meta["topic_title"] = f"{t}｜{kw}/{inst}"
         used_topic_titles.add(str(meta.get("topic_title") or ""))
-        llm_cluster_summary = summarize_with_llm(cl, meta["topic_keywords"])
-        if llm_cluster_summary:
-            event_summary, strategic_signal = llm_cluster_summary
-        else:
-            event_summary, strategic_signal = summarize_cluster_event_zh(cl, meta["topic_keywords"])
+
         supporting = []
         for a in sorted(cl, key=lambda x: x.importance_score, reverse=True)[:4]:
             a.topic_cluster_id = meta["topic_cluster_id"]
-            a.article_summary_zh = summarize_article_with_llm(a) or summarize_article_zh(a)
+            # Already generated in Step-2; keep deterministic fallback only.
+            a.article_summary_zh = a.article_summary_zh or summarize_article_zh(a)
             link = source_link_markdown(a.company_or_firm_name, a.url)
             supporting.append(
                 {
@@ -428,7 +451,7 @@ def run_pipeline(lookback_days: int = 7, max_articles_per_source: int = 35) -> T
         trusted_sources=len(sources),
         covered_sources=covered_sources,
         fetched_articles=len(raw_articles),
-        kept_articles=len(deduped),
+        kept_articles=len(cleaned),
         deduped_articles=len(deduped),
         topic_clusters=len(topic_clusters),
         drop_reasons=dict(drop_reasons),

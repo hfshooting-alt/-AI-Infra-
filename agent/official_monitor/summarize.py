@@ -136,3 +136,41 @@ def infer_entities(article: NormalizedArticle) -> List[str]:
     if not cands:
         cands = [article.company_or_firm_name]
     return cands[:6]
+
+
+
+def summarize_cluster_bundle_with_llm(cluster: List[NormalizedArticle], topic_keywords: List[str]) -> Tuple[str, str, str] | None:
+    """Use LLM to generate trend-level topic title + intro summary + strategic signal."""
+    client = _llm_client()
+    if client is None:
+        return None
+    model = os.environ.get("OFFICIAL_MONITOR_SUMMARY_MODEL", os.environ.get("OPENAI_MODEL", "gpt-4o-mini"))
+    bullets = []
+    for a in cluster[:10]:
+        body = _excerpt(a.article_summary_zh or a.content_text, 220)
+        bullets.append(f"- 机构：{a.company_or_firm_name}\n  标题：{a.title}\n  结构化：{body}")
+    prompt = (
+        "你是投行研究总监。请基于以下事件输出三行中文，务必客观、精炼、可决策：\n"
+        "第一行：以‘话题标题：’开头（<=24字），必须是行业趋势，不要写某家公司名称。\n"
+        "第二行：以‘事件引言：’开头（<=120字），总结本周跨机构共同动作。\n"
+        "第三行：以‘战略信号：’开头（<=70字），给出商业含义。\n"
+        "禁止空话，禁止编造。\n\n"
+        f"关键词：{','.join(topic_keywords[:8])}\n" + "\n".join(bullets)
+    )
+    try:
+        resp = client.responses.create(model=model, input=prompt)
+        text = getattr(resp, "output_text", "") or ""
+    except Exception:
+        return None
+
+    title = intro = signal = ""
+    for ln in [x.strip() for x in text.splitlines() if x.strip()]:
+        if ln.startswith("话题标题："):
+            title = ln.split("：", 1)[1].strip()
+        elif ln.startswith("事件引言："):
+            intro = ln.split("：", 1)[1].strip()
+        elif ln.startswith("战略信号："):
+            signal = ln.split("：", 1)[1].strip()
+    if title and intro:
+        return _clip_zh(title, 30), _clip_zh(intro, 140), _clip_zh(signal or "资本、产品与生态动作正在同步加速。", 90)
+    return None
