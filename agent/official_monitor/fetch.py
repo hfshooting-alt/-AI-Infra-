@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 import time
 from typing import Optional
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_HEADERS = {
     "User-Agent": "official-monitor/1.0 (+https://example.internal)",
@@ -17,8 +20,9 @@ def fetch_url(url: str, timeout: int = 20, retries: int = 2) -> Optional[str]:
             r = requests.get(url, timeout=timeout, headers=DEFAULT_HEADERS)
             if r.status_code == 200 and r.text:
                 return r.text
-        except Exception:
-            pass
+            logger.debug("fetch_url %s returned status %d", url, r.status_code)
+        except Exception as exc:
+            logger.debug("fetch_url %s attempt %d failed: %s", url, i + 1, exc)
         if i < retries:
             time.sleep(0.6 * (i + 1))
     return None

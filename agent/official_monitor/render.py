@@ -39,9 +39,9 @@ def _summary_cards(run_summary: RunSummary, clusters: List[TopicCluster]) -> Lis
 
 def _source_link(url: str, markdown_text: str) -> str:
     return (
-        f"<a class='source-link' href='{escape(url)}' target='_blank' rel='noopener'>{escape(markdown_text)}</a>"
+        f'<a class="source-link" href="{escape(url, quote=True)}" target="_blank" rel="noopener">{escape(markdown_text)}</a>'
         if url
-        else f"<span class='source-link muted'>{escape(markdown_text)}</span>"
+        else f'<span class="source-link muted">{escape(markdown_text)}</span>'
     )
 
 
@@ -214,9 +214,7 @@ def merge_same_title_topics(clusters: List[TopicCluster]) -> List[TopicCluster]:
 
 
 def render_html_fragment(run_summary: RunSummary, clusters: List[TopicCluster]) -> str:
-    selected = sorted(clusters, key=lambda c: (c.topic_priority_score, c.article_count), reverse=True)
-    # Keep cluster boundaries from pipeline; do not merge solely by identical title.
-    selected = sorted(selected, key=lambda c: (c.topic_priority_score, c.article_count), reverse=True)[:4]
+    selected = sorted(clusters, key=lambda c: (c.topic_priority_score, c.article_count), reverse=True)[:4]
     if not selected:
         return (
             "<table role='presentation' width='100%' cellspacing='0' cellpadding='0' style='margin-top:28px'>"

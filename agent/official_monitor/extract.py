@@ -48,8 +48,14 @@ def _strip_html(raw: str) -> str:
 
 
 def _meta_content(html: str, key: str, attr: str = "property") -> str:
-    pat = rf'<meta[^>]*{attr}=["\']{re.escape(key)}["\'][^>]*content=["\']([^"\']+)["\']'
-    m = re.search(pat, html, flags=re.I)
+    # Try attr-before-content order
+    pat1 = rf'<meta[^>]*{attr}=["\']{re.escape(key)}["\'][^>]*content=["\']([^"\']+)["\']'
+    m = re.search(pat1, html, flags=re.I)
+    if m:
+        return m.group(1).strip()
+    # Try content-before-attr order
+    pat2 = rf'<meta[^>]*content=["\']([^"\']+)["\'][^>]*{attr}=["\']{re.escape(key)}["\']'
+    m = re.search(pat2, html, flags=re.I)
     return m.group(1).strip() if m else ""
 
 

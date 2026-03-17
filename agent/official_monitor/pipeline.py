@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 import re
 from collections import defaultdict, Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Tuple
+
+logger = logging.getLogger(__name__)
 
 from .cluster import build_topic_meta, cluster_articles
 from .dates import now_utc, within_last_days
@@ -249,7 +253,7 @@ def _cluster_signature(cluster: List[NormalizedArticle]) -> set[str]:
     for a in cluster:
         for t in _article_tokens(a):
             c[t] += 1
-    return {k for k, v in c.items() if v >= 1}
+    return {k for k, v in c.items() if v >= 2}
 
 
 def _cluster_sim(c1: List[NormalizedArticle], c2: List[NormalizedArticle]) -> float:
@@ -342,7 +346,10 @@ def run_pipeline(lookback_days: int = 7, max_articles_per_source: int = 35) -> T
     article_idx = 1
     covered_sources = 0
 
-    for s in sources:
+    def _fetch_one_source(s):
+        """Fetch all articles from a single source. Returns (articles, local_drop_reasons)."""
+        local_drops = defaultdict(int)
+        local_articles = []
         _log("source_fetch_start", source=s.source_name, landing=s.landing_url)
         listing_urls = discover_listing_urls(s)
         source_candidates = []
@@ -355,30 +362,42 @@ def run_pipeline(lookback_days: int = 7, max_articles_per_source: int = 35) -> T
             _log("listing_parsed", source=s.source_name, listing=lu, candidate_links=len(links))
 
         uniq_candidates = list(dict.fromkeys(source_candidates))[: max_articles_per_source]
-        kept_here = 0
         for u in uniq_candidates:
             html = fetch_url(u)
             if not html:
-                drop_reasons["empty_or_inaccessible"] += 1
+                local_drops["empty_or_inaccessible"] += 1
                 continue
-            art = extract_article(html, u, s, article_idx)
+            art = extract_article(html, u, s, 0)  # idx assigned later
             if not art:
-                drop_reasons["not_real_article_or_bad_parse"] += 1
+                local_drops["not_real_article_or_bad_parse"] += 1
                 continue
             pub_dt = dt.datetime.fromisoformat(art.published_at.replace("Z", "+00:00"))
             if not within_last_days(pub_dt, lookback_days):
-                drop_reasons["outside_7d_window"] += 1
+                local_drops["outside_7d_window"] += 1
                 continue
             if not art.content_text:
-                drop_reasons["empty_content"] += 1
+                local_drops["empty_content"] += 1
                 continue
-            # Step-2 first: keep all parsed news and build structured paragraphs later.
-            raw_articles.append(art)
-            article_idx += 1
-            kept_here += 1
-        if kept_here > 0:
-            covered_sources += 1
-        _log("source_fetch_end", source=s.source_name, kept=kept_here, candidates=len(uniq_candidates))
+            local_articles.append(art)
+        _log("source_fetch_end", source=s.source_name, kept=len(local_articles), candidates=len(uniq_candidates))
+        return local_articles, local_drops
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {pool.submit(_fetch_one_source, s): s for s in sources}
+        for fut in as_completed(futures):
+            try:
+                arts, local_drops = fut.result()
+            except Exception:
+                logger.warning("source %s fetch failed", futures[fut].source_name, exc_info=True)
+                continue
+            for reason, cnt in local_drops.items():
+                drop_reasons[reason] += cnt
+            if arts:
+                covered_sources += 1
+            for a in arts:
+                a.article_id = f"article_{article_idx:04d}"
+                raw_articles.append(a)
+                article_idx += 1
 
     deduped = dedupe_articles(raw_articles)
     _log("dedupe_complete", before=len(raw_articles), after=len(deduped))
