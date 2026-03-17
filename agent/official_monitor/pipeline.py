@@ -29,6 +29,52 @@ def _log(event: str, **kwargs) -> None:
 
 
 
+CORE_SIGNAL_TYPES = {"product_release", "investment_signal", "partnership", "m&a"}
+
+STRONG_SIGNAL_KEYWORDS = [
+    "launch", "launched", "release", "released", "announce", "announced",
+    "general availability", "ga", "debut", "unveil", "introduce", "rollout",
+    "funding", "fundraise", "investment", "invest", "financing", "raised",
+    "acquisition", "acquire", "merger", "m&a", "strategic partnership",
+    "发布", "上线", "推出", "开源", "融资", "投资", "领投", "并购", "收购", "合作",
+]
+
+LOW_SIGNAL_KEYWORDS = [
+    "weekly", "daily", "monthly", "newsletter", "roundup", "recap", "digest",
+    "week in review", "highlights", "highlights of the week", "editorial", "sponsored",
+    "观点", "观察", "周报", "日报", "月报", "简报", "合集", "精选", "回顾", "快讯", "速递", "专栏", "软文",
+]
+
+
+def _passes_signal_gate(article: NormalizedArticle) -> bool:
+    text = f"{article.title} {(article.content_text or '')[:1600]}".lower()
+    strong_hit = any(k in text for k in STRONG_SIGNAL_KEYWORDS)
+    low_signal_hit = any(k in text for k in LOW_SIGNAL_KEYWORDS)
+    signal_type = (article.signal_type or '').strip().lower()
+
+    if low_signal_hit and not strong_hit:
+        return False
+    if signal_type in CORE_SIGNAL_TYPES:
+        return True
+    if strong_hit:
+        return True
+    return False
+
+
+
+def _merge_small_clusters(clusters: List[List[NormalizedArticle]], min_cluster_size: int = 2) -> List[List[NormalizedArticle]]:
+    clusters = [sorted(c, key=lambda x: x.importance_score, reverse=True) for c in clusters if c]
+    if not clusters:
+        return []
+    large = [c for c in clusters if len(c) >= min_cluster_size]
+    small = [c for c in clusters if len(c) < min_cluster_size]
+    if not large:
+        return clusters
+    for s in small:
+        target_idx = min(range(len(large)), key=lambda i: len(large[i]))
+        large[target_idx].extend(s)
+        large[target_idx] = sorted(large[target_idx], key=lambda x: x.importance_score, reverse=True)
+    return large
 
 def _split_cluster_by_signal(cluster: List[NormalizedArticle]) -> List[List[NormalizedArticle]]:
     buckets: Dict[str, List[NormalizedArticle]] = {}
@@ -115,6 +161,9 @@ def run_pipeline(lookback_days: int = 7, max_articles_per_source: int = 35) -> T
             if not art.content_text:
                 drop_reasons["empty_content"] += 1
                 continue
+            if not _passes_signal_gate(art):
+                drop_reasons["low_signal_content"] += 1
+                continue
 
             art.related_entities = infer_entities(art)
             raw_articles.append(art)
@@ -127,9 +176,12 @@ def run_pipeline(lookback_days: int = 7, max_articles_per_source: int = 35) -> T
     deduped = dedupe_articles(raw_articles)
     _log("dedupe_complete", before=len(raw_articles), after=len(deduped))
 
+    _log("cluster_input_ready", events=len(deduped))
+
     clusters_raw = cluster_articles(deduped)
+    clusters_raw = _merge_small_clusters(clusters_raw, min_cluster_size=2)
     clusters_raw = _rebalance_cluster_count(clusters_raw, min_topics=2, max_topics=4)
-    _log("cluster_counts", clusters=len(clusters_raw))
+    _log("cluster_counts", clusters=len(clusters_raw), events=sum(len(c) for c in clusters_raw))
 
     topic_clusters: List[TopicCluster] = []
     for idx, cl in enumerate(clusters_raw, start=1):
@@ -178,7 +230,7 @@ def run_pipeline(lookback_days: int = 7, max_articles_per_source: int = 35) -> T
         trusted_sources=len(sources),
         covered_sources=covered_sources,
         fetched_articles=len(raw_articles),
-        kept_articles=len(raw_articles),
+        kept_articles=len(deduped),
         deduped_articles=len(deduped),
         topic_clusters=len(topic_clusters),
         drop_reasons=dict(drop_reasons),
