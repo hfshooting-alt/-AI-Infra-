@@ -90,6 +90,17 @@ INVESTMENT_HARD_SIGNALS = [
 ]
 
 
+
+INVESTMENT_AWARD_NOISE = [
+    "award", "awards", "honor", "honour", "top 50", "top50", "ranking", "list", "women in", "best investor",
+    "荣誉", "获奖", "榜单", "上榜", "入选", "评选", "年度", "女性投资人", "top50", "top 100",
+]
+
+INVESTMENT_TITLE_HARD_SIGNALS = [
+    "领投", "参投", "完成融资", "完成募资", "新基金", "并购", "收购", "任命", "加入", "离职", "卸任",
+    "led", "co-led", "participated", "raised", "closed", "new fund", "acquisition", "acquire", "appointed", "joined", "departed",
+]
+
 STRICT_EXCLUDE = [
     "bug fix", "bugfix", "patch release", "minor update", "known issues", "changelog", "maintenance",
     "vision", "fireside chat", "keynote", "panel", "rumor", "leak", "unconfirmed", "speculation",
@@ -150,15 +161,31 @@ def _passes_role_specific_gate(article: NormalizedArticle) -> bool:
         return False
 
     if st == 'investment_firm':
-        # Focus only on hard capital/personnel flow, and suppress PR/opinion noise.
+        # Focus only on hard capital/personnel flow; strongly reject honors/awards/opinion pieces.
+        title_low = (article.title or '').lower()
+        has_award_noise = any(k in txt for k in INVESTMENT_AWARD_NOISE)
+        if has_award_noise:
+            return False
+
+        has_title_hard = any(k in title_low for k in INVESTMENT_TITLE_HARD_SIGNALS)
         has_hard = any(k in txt for k in INVESTMENT_HARD_SIGNALS) or any(k in txt for k in INVESTMENT_BIG_EVENT)
         has_amount = _extract_funding_amount(txt) != "未披露"
         has_noise = any(k in txt for k in INVESTMENT_NOISE)
-        if has_noise and not (has_hard or has_amount):
+
+        # opinion/weekly content is dropped unless there is explicit hard action in title.
+        if has_noise and not has_title_hard:
             return False
-        if sig in {'investment_signal', 'm&a'} and (has_hard or has_amount):
+
+        # keep only if there is explicit hard action + (amount OR transaction/personnel keywords)
+        txn_or_personnel = any(k in txt for k in [
+            "融资", "投资", "并购", "收购", "新基金", "任命", "加入", "离职",
+            "funding", "investment", "acquisition", "new fund", "appointed", "joined", "departed"
+        ])
+        if has_title_hard and (has_amount or txn_or_personnel):
             return True
-        return has_hard and (has_amount or any(k in txt for k in ["融资", "投资", "并购", "收购", "funding", "investment", "acquisition"]))
+        if sig == 'm&a' and (has_title_hard or has_amount):
+            return True
+        return False
 
     return sig in {'product_release', 'investment_signal', 'partnership', 'm&a'}
 
@@ -375,7 +402,7 @@ def run_pipeline(lookback_days: int = 7, max_articles_per_source: int = 35) -> T
         # Enforce investment hard requirements: target/amount/sector extraction present.
         if (a.source_type or '').strip().lower() == 'investment_firm':
             sm = a.summary or ''
-            if ('target=' not in sm) or ('amount=' not in sm) or ('sector=' not in sm):
+            if ('target=' not in sm) or ('amount=' not in sm) or ('sector=' not in sm) or ('amount=未披露' in sm):
                 drop_reasons["investment_fields_missing"] += 1
                 continue
         cleaned.append(a)
