@@ -219,7 +219,8 @@ def parse_struct_time(value: Optional[time.struct_time]) -> Optional[dt.datetime
     if not value:
         return None
     try:
-        return dt.datetime.fromtimestamp(time.mktime(value), tz=dt.timezone.utc)
+        import calendar
+        return dt.datetime.fromtimestamp(calendar.timegm(value), tz=dt.timezone.utc)
     except Exception:
         return None
 
@@ -613,12 +614,8 @@ def dedup_rank(papers: Iterable[Paper]) -> List[Paper]:
 
 
 def impact_score(p: Paper) -> float:
-    # log-like scaling without math import for stability
     c = max(p.citation_count, 0)
-    citation_term = 0.0
-    while c > 0:
-        citation_term += 1.0
-        c //= 10
+    citation_term = math.log10(c + 1)
     return citation_term * 2.5 + max(p.influence_score, 0.0)
 
 
@@ -1277,7 +1274,6 @@ def fetch_fulltext_context(paper: Paper) -> str:
     candidates = [paper.url]
     if "arxiv.org/abs/" in (paper.url or ""):
         candidates.append((paper.url or "").replace("/abs/", "/html/"))
-        candidates.append((paper.url or "").replace("/abs/", "/pdf/") + ".pdf")
 
     best = ""
     for u in candidates:
@@ -1421,9 +1417,9 @@ def _trim_complete(text: str, max_len: int) -> str:
 
 def confidence_level(paper: Paper) -> str:
     if paper.abstract and len(paper.abstract) > 900:
+        return "高"
+    if paper.abstract and len(paper.abstract) > 300:
         return "中"
-    if paper.abstract:
-        return "低"
     return "低"
 
 
@@ -1890,7 +1886,7 @@ def run_once() -> None:
             html_digest += official_html
     else:
         html_digest = html_digest.replace("<!-- WEEKLY_SIGNALS_SLOT -->", "", 1)
-    date_str = dt.datetime.now().strftime("%Y-%m-%d")
+    date_str = now_beijing().strftime("%Y-%m-%d")
     send_email(
         subject=f"[{date_str}] World Engine 与 Data Infra 每周论文简报",
         text_body=text_digest,
@@ -1905,8 +1901,8 @@ def run_scheduler() -> None:
     timezone = os.environ.get("TZ", "Asia/Shanghai")
 
     scheduler = BlockingScheduler(timezone=timezone)
-    scheduler.add_job(run_once, "cron", hour=hour, minute=minute)
-    print(f"[INFO] scheduler started, weekly at {report_time} ({timezone})")
+    scheduler.add_job(run_once, "cron", day_of_week="mon", hour=hour, minute=minute)
+    print(f"[INFO] scheduler started, every Monday at {report_time} ({timezone})")
     scheduler.start()
 
 

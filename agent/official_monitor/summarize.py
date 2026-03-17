@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 import os
 import re
 from typing import List, Tuple
 
 from .models import NormalizedArticle
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_text(text: str) -> str:
@@ -95,6 +98,7 @@ def summarize_with_llm(cluster: List[NormalizedArticle], topic_keywords: List[st
         resp = client.responses.create(model=model, input=prompt)
         text = getattr(resp, "output_text", "") or ""
     except Exception:
+        logger.warning("summarize_with_llm failed", exc_info=True)
         return None
     summary, strategic = "", ""
     for ln in [x.strip() for x in text.splitlines() if x.strip()]:
@@ -124,6 +128,7 @@ def summarize_article_with_llm(article: NormalizedArticle) -> str | None:
         text = _normalize_text(getattr(resp, "output_text", "") or "")
         return _clip_zh(text, 300) if text else None
     except Exception:
+        logger.warning("summarize_article_with_llm failed for %s", article.title, exc_info=True)
         return None
 
 
@@ -161,6 +166,7 @@ def summarize_cluster_bundle_with_llm(cluster: List[NormalizedArticle], topic_ke
         resp = client.responses.create(model=model, input=prompt)
         text = getattr(resp, "output_text", "") or ""
     except Exception:
+        logger.warning("summarize_cluster_bundle_with_llm failed", exc_info=True)
         return None
 
     title = intro = signal = ""
