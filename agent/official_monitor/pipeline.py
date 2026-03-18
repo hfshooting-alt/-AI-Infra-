@@ -74,8 +74,14 @@ AI_COMPANY_MUST = [
     "发布", "上线", "推出", "开源", "发布会", "升级", "新版本", "新模型", "核心功能", "模型",
 ]
 AI_COMPANY_PR_NOISE = [
-    "using", "how to", "customer story", "case study", "best practices", "tutorial", "webinar", "spotlight",
-    "hospital automation", "industry stories", "customer success", "opinion", "keynote", "vision", "roadmap talk", "观点", "观察", "实践分享", "案例", "教程", "直播", "活动回顾", "周报", "月报",
+    "using", "how to", "how we", "customer story", "case study", "best practices", "tutorial", "webinar", "spotlight",
+    "hospital automation", "industry stories", "customer success", "opinion", "keynote", "vision", "roadmap talk",
+    "simulation", "use case", "guide", "overview", "future of", "the state of", "what is", "why we",
+    "building with", "build with", "getting started", "deep dive", "behind the scenes", "lessons learned",
+    "research paper", "whitepaper", "white paper", "survey", "benchmark", "evaluation",
+    "观点", "观察", "实践分享", "案例", "教程", "直播", "活动回顾", "周报", "月报",
+    "仿真", "应用案例", "行业洞察", "展望", "前景", "趋势分析", "白皮书", "研究报告", "技术解读", "深度解析",
+    "场景", "落地实践", "解决方案概述", "生态报告",
 ]
 INVESTMENT_BIG_EVENT = [
     "funding", "financing", "investment", "invested", "acquisition", "merger", "portfolio", "appoint", "joins as", "ceo", "cfo", "partner",
@@ -109,6 +115,50 @@ STRICT_EXCLUDE = [
     "bug fix", "bugfix", "patch release", "minor update", "known issues", "changelog", "maintenance",
     "vision", "fireside chat", "keynote", "panel", "rumor", "leak", "unconfirmed", "speculation",
     "修复", "补丁", "已知问题", "维护更新", "愿景", "演讲", "论坛", "圆桌", "传闻", "爆料", "未经证实", "猜测",
+]
+
+# Title patterns that strongly indicate a soft/thought-leadership article rather than a hard announcement.
+# These are checked as regex against the title (case-insensitive).
+SOFT_ARTICLE_TITLE_PATTERNS = [
+    r"^using\b",              # "Using X to build Y"
+    r"^how\s+to\b",           # "How to deploy ..."
+    r"^how\s+\w+\s+is\b",     # "How AI is transforming ..."
+    r"^building\b",           # "Building X for Y"
+    r"^what\s+is\b",          # "What is RAG?"
+    r"^why\b",                # "Why enterprises need ..."
+    r"^the\s+future\s+of\b",  # "The Future of AI"
+    r"^the\s+state\s+of\b",   # "The State of AI 2025"
+    r"^guide\b",              # "Guide to ..."
+    r"\btutorial\b",
+    r"\bintroduction\s+to\b",
+    r"\bgetting\s+started\b",
+    r"\bbest\s+practices\b",
+    r"\blessons\s+learned\b",
+    r"\bbehind\s+the\s+scenes\b",
+    r"\bdeep\s+dive\b",
+    r"\bexplained\b",
+    r"\bdemystif",
+    r"\b仿真\b",
+    r"\b应用案例\b",
+    r"\b技术解读\b",
+    r"\b深度解析\b",
+    r"\b行业展望\b",
+    r"\b趋势\b",
+    r"\b白皮书\b",
+]
+
+# Title keywords that confirm a HARD announcement (product launch / M&A / core feature).
+AI_COMPANY_TITLE_MUST = [
+    "launch", "launches", "launched", "release", "releases", "released",
+    "announce", "announces", "announced", "unveil", "unveils",
+    "introduce", "introduces", "introducing",
+    "generally available", "general availability", "ga",
+    "debut", "debuts", "open source", "open-source", "opens",
+    "acquire", "acquires", "acquired", "acquisition",
+    "partner", "partners", "partnership",
+    "发布", "上线", "推出", "开源", "正式发布", "全面开放",
+    "收购", "并购", "合作", "战略合作",
+    "新模型", "新版本", "新功能",
 ]
 
 FUNDING_AMOUNT_PATTERNS = [
@@ -150,6 +200,7 @@ def _extract_company_name(article: NormalizedArticle) -> str:
 
 def _passes_role_specific_gate(article: NormalizedArticle) -> bool:
     txt = f"{article.title} {(article.article_summary_zh or '')} {(article.summary or '')} {(article.content_text or '')[:2200]}".lower()
+    title_low = (article.title or '').lower()
     st = (article.source_type or '').strip().lower()
     sig = (article.signal_type or '').strip().lower()
 
@@ -157,16 +208,35 @@ def _passes_role_specific_gate(article: NormalizedArticle) -> bool:
         return False
 
     if st == 'ai_company':
-        # Only disruptive product launches / core features / strategic M&A-partnership.
-        if any(k in txt for k in AI_COMPANY_PR_NOISE) and not any(k in txt for k in AI_COMPANY_MUST):
+        # ── Hard rule 1: reject if title matches soft-article patterns ──
+        if any(re.search(pat, title_low) for pat in SOFT_ARTICLE_TITLE_PATTERNS):
             return False
-        if sig in {'product_release', 'm&a', 'partnership'} and any(k in txt for k in AI_COMPANY_MUST):
+
+        # ── Hard rule 2: reject PR noise unless title contains MUST keyword ──
+        has_body_noise = any(k in txt for k in AI_COMPANY_PR_NOISE)
+        has_title_must = any(k in title_low for k in AI_COMPANY_TITLE_MUST)
+        has_body_must = any(k in txt for k in AI_COMPANY_MUST)
+
+        if has_body_noise and not has_title_must:
+            return False
+
+        # ── Core gate: require title-level evidence of a hard announcement ──
+        if sig in {'product_release', 'm&a', 'partnership'} and has_title_must:
             return True
+
+        # Fallback: if body has MUST keywords but title does NOT, still reject.
+        # This blocks articles that merely mention "launch" in passing.
+        if has_body_must and not has_title_must:
+            return False
+
         return False
 
     if st == 'investment_firm':
+        # ── Reject soft-article titles for investment sources too ──
+        if any(re.search(pat, title_low) for pat in SOFT_ARTICLE_TITLE_PATTERNS):
+            return False
+
         # Focus only on hard capital/personnel flow; strongly reject honors/awards/opinion pieces.
-        title_low = (article.title or '').lower()
         has_award_noise = any(k in txt for k in INVESTMENT_AWARD_NOISE)
         if has_award_noise:
             return False
@@ -178,6 +248,14 @@ def _passes_role_specific_gate(article: NormalizedArticle) -> bool:
 
         # opinion/weekly content is dropped unless there is explicit hard action in title.
         if has_noise and not has_title_hard:
+            return False
+
+        # ── Reject social media prediction / portfolio daily ops ──
+        social_noise = any(k in txt for k in [
+            "prediction", "forecast", "outlook", "macro", "market commentary",
+            "大盘", "预测", "宏观", "市场展望", "日常运营", "被投动态",
+        ])
+        if social_noise and not has_title_hard:
             return False
 
         # keep only if there is explicit hard action + (amount OR transaction/personnel keywords)

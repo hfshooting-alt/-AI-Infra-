@@ -324,7 +324,15 @@ def render_html_fragment(run_summary: RunSummary, clusters: List[TopicCluster]) 
 def render_html(run_summary: RunSummary, clusters: List[TopicCluster]) -> str:
     hero = _report_hero(run_summary, clusters)
     summary = _summary_stats(run_summary, clusters)
-    sections = "".join([_report_section(i, c) for i, c in enumerate(clusters, start=1)])
+    if not clusters:
+        sections = (
+            "<section class='report-section'>"
+            "<div style='text-align:center;padding:40px 20px;color:#64748b;font-size:18px;font-weight:600'>"
+            "本周无核心异动"
+            "</div></section>"
+        )
+    else:
+        sections = "".join([_report_section(i, c) for i, c in enumerate(clusters, start=1)])
 
     return f"""
 <!doctype html>
