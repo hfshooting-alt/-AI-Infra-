@@ -35,11 +35,13 @@ jobs:
       - name: Run daily paper agent
         run: python agent/daily_paper_agent.py
 
-      - name: Upload top papers (PDF)
+      - name: Upload top papers (PDF) and raw articles (Excel)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: top-papers-pdf
-          path: papers/*.pdf
+          path: |
+            papers/*.pdf
+            papers/*.xlsx
           if-no-files-found: ignore
           retention-days: 30
