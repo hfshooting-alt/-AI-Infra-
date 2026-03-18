@@ -27,6 +27,7 @@ from .summarize import (
     summarize_with_llm,
     summarize_cluster_bundle_with_llm,
 )
+from .export import export_raw_articles_excel
 
 
 def _log(event: str, **kwargs) -> None:
@@ -499,6 +500,14 @@ def run_pipeline(lookback_days: int = 7, max_articles_per_source: int = 35) -> T
 
     deduped = dedupe_articles(raw_articles)
     _log("dedupe_complete", before=len(raw_articles), after=len(deduped))
+
+    # Export pre-cleaning raw articles to Excel (before any signal/role gate).
+    import os, pathlib
+    output_dir = pathlib.Path(os.environ.get("PAPERS_DIR", "papers"))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    excel_path = output_dir / "official_monitor_raw_articles.xlsx"
+    export_raw_articles_excel(deduped, excel_path)
+    _log("raw_articles_excel_exported", path=str(excel_path), rows=len(deduped))
 
     # Step-2: traverse all deduped news and output structured paragraph first.
     for a in deduped:
