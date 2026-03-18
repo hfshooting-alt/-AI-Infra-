@@ -75,7 +75,7 @@ AI_COMPANY_MUST = [
 ]
 AI_COMPANY_PR_NOISE = [
     "using", "how to", "how we", "customer story", "case study", "best practices", "tutorial", "webinar", "spotlight",
-    "hospital automation", "industry stories", "customer success", "opinion", "keynote", "vision", "roadmap talk",
+    "hospital automation", "industry stories", "customer success", "opinion", "roadmap talk",
     "simulation", "use case", "guide", "overview", "future of", "the state of", "what is", "why we",
     "building with", "build with", "getting started", "deep dive", "behind the scenes", "lessons learned",
     "research paper", "whitepaper", "white paper", "survey", "benchmark", "evaluation",
@@ -113,8 +113,14 @@ INVESTMENT_TITLE_HARD_SIGNALS = [
 
 STRICT_EXCLUDE = [
     "bug fix", "bugfix", "patch release", "minor update", "known issues", "changelog", "maintenance",
-    "vision", "fireside chat", "keynote", "panel", "rumor", "leak", "unconfirmed", "speculation",
-    "修复", "补丁", "已知问题", "维护更新", "愿景", "演讲", "论坛", "圆桌", "传闻", "爆料", "未经证实", "猜测",
+    "fireside chat", "panel", "rumor", "leak", "unconfirmed", "speculation",
+    "修复", "补丁", "已知问题", "维护更新", "论坛", "圆桌", "传闻", "爆料", "未经证实", "猜测",
+]
+
+# Keywords that are excluded ONLY when the title lacks any hard announcement signal.
+# "keynote" and "vision" often appear alongside real product launches (e.g. GTC keynotes).
+SOFT_EXCLUDE = [
+    "keynote", "vision", "愿景", "演讲",
 ]
 
 # Title patterns that strongly indicate a soft/thought-leadership article rather than a hard announcement.
@@ -207,7 +213,21 @@ def _passes_role_specific_gate(article: NormalizedArticle) -> bool:
     if any(k in txt for k in STRICT_EXCLUDE):
         return False
 
+    # Soft-exclude: reject "keynote"/"vision" ONLY when title has no hard announcement keyword.
+    has_title_hard_any = any(k in title_low for k in AI_COMPANY_TITLE_MUST)
+    if any(k in txt for k in SOFT_EXCLUDE) and not has_title_hard_any:
+        return False
+
     if st == 'ai_company':
+        # ── Cross-role: let AI company investment news pass through ──
+        has_invest_title = any(k in title_low for k in [
+            "invest", "invests", "invested", "investment", "funding", "raises", "raised",
+            "acquisition", "acquire", "acquires", "acquired",
+            "投资", "领投", "融资", "收购", "并购",
+        ])
+        if has_invest_title and any(k in txt for k in INVESTMENT_BIG_EVENT):
+            return True
+
         # ── Hard rule 1: reject if title matches soft-article patterns ──
         if any(re.search(pat, title_low) for pat in SOFT_ARTICLE_TITLE_PATTERNS):
             return False
