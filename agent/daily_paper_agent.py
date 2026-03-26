@@ -1438,6 +1438,7 @@ def analyze_paper(client: OpenAI, paper: Paper, category: str, fulltext_context:
     completion = client.chat.completions.create(
         model=os.environ.get("GEMINI_MODEL", DEFAULT_MODEL),
         temperature=0.1,
+        max_tokens=8192,
         messages=[
             {"role": "system", "content": "你是资深科技行业分析师，为科技公司高管撰写技术研究简报。读者是聪明但非技术专家的企业高管，所有专业术语必须用通俗语言解释。行文简洁有力，直接陈述事实与判断，绝不使用'论文指出/报告/声称'等学术转述句式。"},
             {"role": "user", "content": build_prompt(paper, category, fulltext_context)},
