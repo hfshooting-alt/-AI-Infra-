@@ -58,18 +58,20 @@ LOW_SIGNAL_KEYWORDS = [
 
 
 def _passes_signal_gate(article: NormalizedArticle) -> bool:
-    text = f"{article.title} {(article.content_text or '')[:1600]}".lower()
-    strong_hit = any(k in text for k in STRONG_SIGNAL_KEYWORDS)
-    low_signal_hit = any(k in text for k in LOW_SIGNAL_KEYWORDS)
-    signal_type = (article.signal_type or '').strip().lower()
+    """Lightweight gate: only reject obvious noise (maintenance, changelogs, career pages).
 
-    if low_signal_hit and not strong_hit:
-        return False
-    if signal_type in CORE_SIGNAL_TYPES:
-        return True
-    if strong_hit:
-        return True
-    return False
+    We intentionally keep the filter loose — the goal is to capture a broad
+    range of content including podcasts, deep-dives, research, product updates,
+    and technical blog posts, not just hard-news announcements.
+    """
+    text = f"{article.title} {(article.content_text or '')[:1600]}".lower()
+    noise_patterns = [
+        "bug fix", "bugfix", "patch release", "minor update", "known issues",
+        "changelog", "maintenance", "status update", "incident report",
+        "cookie policy", "terms of service", "privacy policy",
+        "修复", "补丁", "已知问题", "维护更新", "服务条款",
+    ]
+    return not any(k in text for k in noise_patterns)
 
 
 
@@ -210,91 +212,29 @@ def _extract_company_name(article: NormalizedArticle) -> str:
 
 
 def _passes_role_specific_gate(article: NormalizedArticle) -> bool:
-    txt = f"{article.title} {(article.article_summary_zh or '')} {(article.summary or '')} {(article.content_text or '')[:2200]}".lower()
+    """Lightweight content-type filter.
+
+    We keep almost everything — the goal is to surface podcasts, tech deep-dives,
+    product releases, research papers, and long-form content. Only drop content
+    that is clearly not substantive (empty pages, career listings, etc.).
+    """
+    txt = f"{article.title} {(article.content_text or '')[:1600]}".lower()
     title_low = (article.title or '').lower()
-    st = (article.source_type or '').strip().lower()
-    sig = (article.signal_type or '').strip().lower()
 
-    if any(k in txt for k in STRICT_EXCLUDE):
+    # Only reject truly irrelevant content
+    junk_patterns = [
+        "cookie", "privacy policy", "terms of use", "404", "page not found",
+        "unsubscribe", "job opening", "career", "we are hiring",
+    ]
+    if any(k in title_low for k in junk_patterns):
         return False
 
-    # Soft-exclude: reject "keynote"/"vision" ONLY when title has no hard announcement keyword.
-    has_title_hard_any = any(k in title_low for k in AI_COMPANY_TITLE_MUST)
-    if any(k in txt for k in SOFT_EXCLUDE) and not has_title_hard_any:
+    # Reject if content is too thin to be useful
+    content_len = len((article.content_text or '').strip())
+    if content_len < 100 and not (article.summary or '').strip():
         return False
 
-    if st == 'ai_company':
-        # ── Cross-role: let AI company investment news pass through ──
-        has_invest_title = any(k in title_low for k in [
-            "invest", "invests", "invested", "investment", "funding", "raises", "raised",
-            "acquisition", "acquire", "acquires", "acquired",
-            "投资", "领投", "融资", "收购", "并购",
-        ])
-        if has_invest_title and any(k in txt for k in INVESTMENT_BIG_EVENT):
-            return True
-
-        # ── Hard rule 1: reject if title matches soft-article patterns ──
-        if any(re.search(pat, title_low) for pat in SOFT_ARTICLE_TITLE_PATTERNS):
-            return False
-
-        # ── Hard rule 2: reject PR noise unless title contains MUST keyword ──
-        has_body_noise = any(k in txt for k in AI_COMPANY_PR_NOISE)
-        has_title_must = any(k in title_low for k in AI_COMPANY_TITLE_MUST)
-        has_body_must = any(k in txt for k in AI_COMPANY_MUST)
-
-        if has_body_noise and not has_title_must:
-            return False
-
-        # ── Core gate: require title-level evidence of a hard announcement ──
-        if sig in {'product_release', 'm&a', 'partnership'} and has_title_must:
-            return True
-
-        # Fallback: if body has MUST keywords but title does NOT, still reject.
-        # This blocks articles that merely mention "launch" in passing.
-        if has_body_must and not has_title_must:
-            return False
-
-        return False
-
-    if st == 'investment_firm':
-        # ── Reject soft-article titles for investment sources too ──
-        if any(re.search(pat, title_low) for pat in SOFT_ARTICLE_TITLE_PATTERNS):
-            return False
-
-        # Focus only on hard capital/personnel flow; strongly reject honors/awards/opinion pieces.
-        has_award_noise = any(k in txt for k in INVESTMENT_AWARD_NOISE)
-        if has_award_noise:
-            return False
-
-        has_title_hard = any(k in title_low for k in INVESTMENT_TITLE_HARD_SIGNALS)
-        has_hard = any(k in txt for k in INVESTMENT_HARD_SIGNALS) or any(k in txt for k in INVESTMENT_BIG_EVENT)
-        has_amount = _extract_funding_amount(txt) != "未披露"
-        has_noise = any(k in txt for k in INVESTMENT_NOISE)
-
-        # opinion/weekly content is dropped unless there is explicit hard action in title.
-        if has_noise and not has_title_hard:
-            return False
-
-        # ── Reject social media prediction / portfolio daily ops ──
-        social_noise = any(k in txt for k in [
-            "prediction", "forecast", "outlook", "macro", "market commentary",
-            "大盘", "预测", "宏观", "市场展望", "日常运营", "被投动态",
-        ])
-        if social_noise and not has_title_hard:
-            return False
-
-        # keep only if there is explicit hard action + (amount OR transaction/personnel keywords)
-        txn_or_personnel = any(k in txt for k in [
-            "融资", "投资", "并购", "收购", "新基金", "任命", "加入", "离职",
-            "funding", "investment", "acquisition", "new fund", "appointed", "joined", "departed"
-        ])
-        if has_title_hard and (has_amount or txn_or_personnel):
-            return True
-        if sig == 'm&a' and (has_title_hard or has_amount):
-            return True
-        return False
-
-    return sig in {'product_release', 'investment_signal', 'partnership', 'm&a'}
+    return True
 
 
 def _build_precluster_summary(article: NormalizedArticle) -> str:
@@ -509,13 +449,10 @@ def run_pipeline(lookback_days: int = 7, max_articles_per_source: int = 35) -> T
     deduped = dedupe_articles(raw_articles)
     _log("dedupe_complete", before=len(raw_articles), after=len(deduped))
 
-    # Export pre-cleaning raw articles to Excel (before any signal/role gate).
-    import os, pathlib
-    output_dir = pathlib.Path(os.environ.get("PAPERS_DIR", "papers"))
-    output_dir.mkdir(parents=True, exist_ok=True)
-    excel_path = output_dir / "official_monitor_raw_articles.xlsx"
-    export_raw_articles_excel(deduped, excel_path)
-    _log("raw_articles_excel_exported", path=str(excel_path), rows=len(deduped))
+    # Excel export is deferred to after cleaning so we can mark selection status.
+    import os as _os
+    import pathlib as _pathlib
+    _excel_output_dir = _pathlib.Path(_os.environ.get("PAPERS_DIR", "papers"))
 
     # Step-2: traverse all deduped news and output structured paragraph first.
     for a in deduped:
@@ -533,15 +470,16 @@ def run_pipeline(lookback_days: int = 7, max_articles_per_source: int = 35) -> T
         if not _passes_role_specific_gate(a):
             drop_reasons["role_specific_filtered"] += 1
             continue
-        # Enforce investment hard requirements: target/amount/sector extraction present.
-        if (a.source_type or '').strip().lower() == 'investment_firm':
-            sm = a.summary or ''
-            if ('target=' not in sm) or ('amount=' not in sm) or ('sector=' not in sm) or ('amount=未披露' in sm):
-                drop_reasons["investment_fields_missing"] += 1
-                continue
         cleaned.append(a)
 
     _log("cluster_input_ready", events=len(cleaned), deduped=len(deduped))
+
+    # Export ALL deduped articles to Excel with selection status.
+    _excel_output_dir.mkdir(parents=True, exist_ok=True)
+    excel_path = _excel_output_dir / "official_monitor_raw_articles.xlsx"
+    selected_titles = {a.title for a in cleaned}
+    export_raw_articles_excel(deduped, excel_path, selected_titles=selected_titles)
+    _log("raw_articles_excel_exported", path=str(excel_path), total=len(deduped), selected=len(cleaned))
 
     clusters_raw = cluster_articles(cleaned)
     clusters_raw = _merge_small_clusters(clusters_raw, min_cluster_size=2)
