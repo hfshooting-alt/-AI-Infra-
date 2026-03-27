@@ -5,6 +5,13 @@ from urllib.parse import urljoin, urlparse
 
 from .models import SourceConfig
 
+# URL path segments that indicate a real article (not nav / footer / legal).
+_ARTICLE_PATH_HINTS = [
+    "/news", "/blog", "/research", "/article", "/insights", "/press",
+    "/stories", "/posts", "/perspective", "/engineering", "/paper",
+    "/feed/", "/updates",
+]
+
 
 def _is_allowed(url: str, source: SourceConfig) -> bool:
     netloc = urlparse(url).netloc.lower()
@@ -28,7 +35,36 @@ def discover_listing_urls(source: SourceConfig) -> list[str]:
     return out
 
 
+def _extract_rss_links(xml_text: str, listing_url: str, source: SourceConfig) -> list[str]:
+    """Extract article URLs from RSS/Atom XML content."""
+    links = []
+    seen = set()
+    # Match <link>URL</link> (RSS) and <link href="URL"/> (Atom)
+    for url in re.findall(r'<link[^>]*>([^<]+)</link>', xml_text):
+        url = url.strip()
+        if url and url.startswith("http") and url not in seen:
+            if _is_allowed(url, source) and not _is_excluded(url, source):
+                seen.add(url)
+                links.append(url)
+    for url in re.findall(r'<link[^>]+href=["\']([^"\']+)["\']', xml_text):
+        url = url.strip()
+        if url and url.startswith("http") and url not in seen:
+            if _is_allowed(url, source) and not _is_excluded(url, source):
+                seen.add(url)
+                links.append(url)
+    return links
+
+
 def discover_article_links(listing_html: str, listing_url: str, source: SourceConfig) -> list[str]:
+    # Detect RSS/Atom feed content and use specialized parser.
+    is_feed = (
+        listing_html.lstrip()[:200].startswith("<?xml")
+        or "<rss" in listing_html[:500]
+        or "<feed" in listing_html[:500]
+    )
+    if is_feed:
+        return _extract_rss_links(listing_html, listing_url, source)[:120]
+
     links = []
     seen = set()
     for href in re.findall(r'href=["\']([^"\']+)["\']', listing_html, flags=re.I):
@@ -38,7 +74,7 @@ def discover_article_links(listing_html: str, listing_url: str, source: SourceCo
         if not _is_allowed(full, source) or _is_excluded(full, source):
             continue
         low = full.lower()
-        if not any(k in low for k in ["/news", "/blog", "/research", "/article", "/insights", "/press", "/stories", "/posts"]):
+        if not any(k in low for k in _ARTICLE_PATH_HINTS):
             continue
         if full not in seen:
             seen.add(full)
