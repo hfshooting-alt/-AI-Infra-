@@ -1680,7 +1680,7 @@ def build_overview_lines(items: List[AnalyzedPaper]) -> List[str]:
             "总体判断：本周未检索到符合条件的论文。",
         ]
 
-    top3 = sorted(items, key=lambda x: (x.discussion_score, x.early_score), reverse=True)[:3]
+    top3 = sorted(items, key=lambda x: ranking_score(x.paper), reverse=True)[:3]
     trend_pool = " ".join([normalize(f"{x.paper.title} {x.paper.abstract}") for x in items])
 
     trend_lines: List[str] = []
@@ -1999,24 +1999,22 @@ def build_daily_digest(client: OpenAI) -> Tuple[str, str]:
         cleaned = clean_symbols(text)
         return cleaned, to_html(cleaned)
 
-    # ── Export all papers to Excel as quality checkpoint ──
+    # ── Export candidate papers to Excel with full score breakdowns first ──
     _export_paper_quality_checkpoint(papers)
 
-    candidate_pool = diversify_sources(
-        sorted(papers, key=ranking_score, reverse=True),
-        int(os.environ.get("MAX_PAPERS", "18")),
-    )
-    selected = pick_top_discussed_papers(candidate_pool, limit=3)
-    if len(selected) < 3:
-        selected_titles = {p.title for p in selected}
-        for p in candidate_pool:
-            if p.title in selected_titles:
-                continue
-            selected.append(p)
-            selected_titles.add(p.title)
-            if len(selected) >= 3:
-                break
-    selected = selected[:3]
+    # Top-3 MUST follow the final composite score used in Excel ("综合排序分")
+    # i.e. ranking_score descending on the same candidate paper set.
+    candidate_pool = sorted(papers, key=ranking_score, reverse=True)
+    selected = candidate_pool[:3]
+    for p in selected:
+        # Ensure social context exists for the "为什么值得关注" section.
+        if not getattr(p, "_social_details", None):
+            try:
+                social_score, details = compute_social_discussion_score(p)
+                setattr(p, "_social_score", social_score)
+                setattr(p, "_social_details", details)
+            except Exception:
+                pass
 
     analyzed: List[AnalyzedPaper] = []
     parsed_map: Dict[str, Dict[str, str]] = {}
@@ -2074,7 +2072,7 @@ def build_daily_digest(client: OpenAI) -> Tuple[str, str]:
         return cleaned, to_html(cleaned)
 
 
-    analyzed.sort(key=lambda x: (x.discussion_score, x.early_score), reverse=True)
+    analyzed.sort(key=lambda x: ranking_score(x.paper), reverse=True)
     rank_map = {it.paper.title: i + 1 for i, it in enumerate(analyzed)}
 
     start, end = target_beijing_date_window()
