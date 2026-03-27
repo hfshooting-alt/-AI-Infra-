@@ -270,7 +270,7 @@ def _rebalance_cluster_count(clusters: List[List[NormalizedArticle]], min_topics
     return [sorted(c, key=lambda x: x.importance_score, reverse=True) for c in clusters if c]
 
 
-def run_pipeline(lookback_days: int = 7, max_articles_per_source: int = 35) -> Tuple[RunSummary, List[NormalizedArticle], List[TopicCluster], List[NormalizedArticle], dict | None]:
+def run_pipeline(lookback_days: int = 7, max_articles_per_source: int = 20) -> Tuple[RunSummary, List[NormalizedArticle], List[TopicCluster], List[NormalizedArticle], dict | None]:
     started = now_utc()
     sources = load_sources()
     drop_reasons = defaultdict(int)
@@ -291,7 +291,7 @@ def run_pipeline(lookback_days: int = 7, max_articles_per_source: int = 35) -> T
         source_candidates = []
         rss_articles = []
 
-        for lu in listing_urls[:cfg("pipeline.listing_urls_limit", 6)]:
+        for lu in listing_urls[:cfg("pipeline.listing_urls_limit", 3)]:
             html = fetch_url(lu)
             if not html:
                 continue
@@ -315,29 +315,40 @@ def run_pipeline(lookback_days: int = 7, max_articles_per_source: int = 35) -> T
                 continue
             local_articles.append(art)
 
-        # Process HTML-discovered candidates (fetch each article page)
+        # Process HTML-discovered candidates — fetch article pages concurrently
         uniq_candidates = list(dict.fromkeys(source_candidates))[: max_articles_per_source]
-        for u in uniq_candidates:
+
+        def _try_extract(u):
             html = fetch_url(u)
             if not html:
-                local_drops["empty_or_inaccessible"] += 1
-                continue
-            art = extract_article(html, u, s, 0)  # idx assigned later
+                return None, "empty_or_inaccessible"
+            art = extract_article(html, u, s, 0)
             if not art:
-                local_drops["not_real_article_or_bad_parse"] += 1
-                continue
+                return None, "not_real_article_or_bad_parse"
             pub_dt = dt.datetime.fromisoformat(art.published_at.replace("Z", "+00:00"))
             if not within_last_days(pub_dt, lookback_days):
-                local_drops["outside_7d_window"] += 1
-                continue
+                return None, "outside_7d_window"
             if not art.content_text:
-                local_drops["empty_content"] += 1
-                continue
-            local_articles.append(art)
+                return None, "empty_content"
+            return art, None
+
+        with ThreadPoolExecutor(max_workers=6) as article_pool:
+            futs = {article_pool.submit(_try_extract, u): u for u in uniq_candidates}
+            for f in as_completed(futs):
+                try:
+                    art, reason = f.result()
+                except Exception:
+                    local_drops["fetch_exception"] += 1
+                    continue
+                if art:
+                    local_articles.append(art)
+                elif reason:
+                    local_drops[reason] += 1
+
         _log("source_fetch_end", source=s.source_name, kept=len(local_articles), candidates=len(uniq_candidates) + len(rss_articles))
         return local_articles, local_drops
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    with ThreadPoolExecutor(max_workers=12) as pool:
         futures = {pool.submit(_fetch_one_source, s): s for s in sources}
         for fut in as_completed(futures):
             try:
