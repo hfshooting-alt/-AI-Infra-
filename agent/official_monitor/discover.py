@@ -5,12 +5,38 @@ from urllib.parse import urljoin, urlparse
 
 from .models import SourceConfig
 
-# URL path segments that indicate a real article (not nav / footer / legal).
-_ARTICLE_PATH_HINTS = [
-    "/news", "/blog", "/research", "/article", "/insights", "/press",
-    "/stories", "/posts", "/perspective", "/engineering", "/paper",
-    "/feed/", "/updates",
+# URL path segments / extensions that are definitely NOT articles.
+# We use a blocklist approach — accept all links by default, only reject
+# navigation, legal, media assets, and other clearly non-article URLs.
+_NON_ARTICLE_PATTERNS = [
+    # Navigation & structural pages
+    "/careers", "/jobs", "/hiring", "/about-us", "/about/",
+    "/contact", "/login", "/signup", "/register", "/sign-in",
+    "/pricing", "/demo", "/request-demo",
+    "/team/", "/people/", "/leadership",
+    "/portfolio/", "/companies/",
+    # Product / docs / platform pages (not articles)
+    "/docs/", "/documentation", "/api-reference", "/sdk",
+    "/models/", "/datasets/", "/spaces/",
+    "/solutions", "/partners", "/customers",
+    "/customer-stories", "/case-studies",
+    "/storage", "/enterprise",
+    # Legal / policy
+    "/privacy", "/terms", "/cookie", "/legal", "/sitemap",
+    "/acceptable-use", "/dmca", "/compliance",
+    # Taxonomy / pagination
+    "/page/", "/author/",
+    # Static assets
+    ".css", ".js", ".png", ".jpg", ".jpeg", ".gif", ".svg",
+    ".pdf", ".xml", ".json", ".zip", ".woff", ".ttf",
+    # Social / external
+    "javascript:", "mailto:", "tel:", "#",
+    "twitter.com", "linkedin.com", "facebook.com", "youtube.com",
+    "github.com",
 ]
+
+# Minimum URL path depth — reject root/homepage links like "https://openai.com/"
+_MIN_PATH_SEGMENTS = 1  # At least one path segment after domain
 
 
 def _is_allowed(url: str, source: SourceConfig) -> bool:
@@ -20,6 +46,21 @@ def _is_allowed(url: str, source: SourceConfig) -> bool:
 
 def _is_excluded(url: str, source: SourceConfig) -> bool:
     return any(pat in url for pat in source.exclude_url_patterns)
+
+
+def _is_non_article(url: str) -> bool:
+    """Return True if URL is clearly not an article (nav, legal, asset, etc.)."""
+    low = url.lower()
+    return any(pat in low for pat in _NON_ARTICLE_PATTERNS)
+
+
+def _has_enough_path(url: str) -> bool:
+    """Reject bare domain or single-segment URLs (e.g. https://x.ai/)."""
+    path = urlparse(url).path.strip("/")
+    if not path:
+        return False
+    segments = [s for s in path.split("/") if s]
+    return len(segments) >= _MIN_PATH_SEGMENTS
 
 
 def discover_listing_urls(source: SourceConfig) -> list[str]:
@@ -57,13 +98,14 @@ def _extract_rss_links(xml_text: str, listing_url: str, source: SourceConfig) ->
 
 def discover_article_links(listing_html: str, listing_url: str, source: SourceConfig) -> list[str]:
     # Detect RSS/Atom feed content and use specialized parser.
+    head = listing_html.lstrip()[:500]
     is_feed = (
-        listing_html.lstrip()[:200].startswith("<?xml")
-        or "<rss" in listing_html[:500]
-        or "<feed" in listing_html[:500]
+        head.startswith("<?xml")
+        or "<rss" in head
+        or "<feed" in head
     )
     if is_feed:
-        return _extract_rss_links(listing_html, listing_url, source)[:120]
+        return _extract_rss_links(listing_html, listing_url, source)[:200]
 
     links = []
     seen = set()
@@ -73,10 +115,13 @@ def discover_article_links(listing_html: str, listing_url: str, source: SourceCo
             continue
         if not _is_allowed(full, source) or _is_excluded(full, source):
             continue
-        low = full.lower()
-        if not any(k in low for k in _ARTICLE_PATH_HINTS):
+        if _is_non_article(full):
             continue
-        if full not in seen:
-            seen.add(full)
+        if not _has_enough_path(full):
+            continue
+        # Deduplicate ignoring trailing slash and fragment
+        norm = full.split("#")[0].rstrip("/")
+        if norm not in seen:
+            seen.add(norm)
             links.append(full)
-    return links[:120]
+    return links[:200]
