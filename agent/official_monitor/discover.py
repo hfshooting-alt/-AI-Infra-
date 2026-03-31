@@ -31,6 +31,10 @@ def discover_listing_urls(source: SourceConfig) -> list[str]:
 def discover_article_links(listing_html: str, listing_url: str, source: SourceConfig) -> list[str]:
     links = []
     seen = set()
+    reject_tokens = [
+        "/comments", "/comment/", "/feed", "/rss", "/signup", "/sign-up", "/register", "/login",
+        "/console", "/portal", "/community", "/forum", "/docs", "/documentation", "/download",
+    ]
     for href in re.findall(r'href=["\']([^"\']+)["\']', listing_html, flags=re.I):
         full = urljoin(listing_url, href.strip())
         if not full.startswith("http"):
@@ -38,6 +42,8 @@ def discover_article_links(listing_html: str, listing_url: str, source: SourceCo
         if not _is_allowed(full, source) or _is_excluded(full, source):
             continue
         low = full.lower()
+        if any(tok in low for tok in reject_tokens):
+            continue
         if not any(k in low for k in ["/news", "/blog", "/research", "/article", "/insights", "/press", "/stories", "/posts"]):
             continue
         if full not in seen:
