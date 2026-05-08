@@ -42,6 +42,30 @@ def _log(event: str, **kwargs) -> None:
     print(json.dumps(payload, ensure_ascii=False))
 
 
+def _clean_excerpt(text: str, limit: int = 600) -> str:
+    """Trim *text* to *limit* chars, ending at a sentence boundary if possible.
+
+    Avoids the awkward mid-word "...year, ..." cuts in rendered reports.
+    """
+    t = re.sub(r"\s+", " ", text or "").strip()
+    if not t:
+        return ""
+    if len(t) <= limit:
+        return t
+    window = t[:limit]
+    cut = max(
+        window.rfind("。"), window.rfind("！"), window.rfind("？"),
+        window.rfind(". "), window.rfind("! "), window.rfind("? "),
+    )
+    if cut >= int(limit * 0.5):
+        return window[: cut + 1].strip()
+    # Fall back to last whitespace, never cut mid-word.
+    space = window.rfind(" ")
+    if space >= int(limit * 0.5):
+        return window[:space].rstrip(",;:") + "…"
+    return window.rstrip(",;: ") + "…"
+
+
 def _infer_pub_date_from_url(url: str) -> dt.datetime | None:
     """Best-effort publication date extraction from URL path.
 
@@ -495,9 +519,9 @@ def run_pipeline(lookback_days: int = 7, max_articles_per_source: int = 20) -> T
             # Already generated in Step-2; keep deterministic fallback only.
             a.article_summary_zh = a.article_summary_zh or summarize_article_zh(a)
             link = source_link_markdown(a.company_or_firm_name, a.url)
-            # Include a content excerpt so the report can show original text,
-            # not just a URL.  Keep it reasonable (~800 chars) for rendering.
-            content_excerpt = (a.content_text or "")[:800].strip()
+            # Include a content excerpt cut at a sentence boundary so the
+            # full report shows clean original text (collapsible view).
+            content_excerpt = _clean_excerpt(a.content_text or "", limit=600)
             supporting.append(
                 {
                     "article_id": a.article_id,
