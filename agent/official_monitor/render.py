@@ -192,9 +192,7 @@ def render_markdown(run_summary: RunSummary, clusters: List[TopicCluster]) -> st
             lines.append(f"  - **摘要：** {a['article_summary_zh']}")
             excerpt = (a.get('content_excerpt') or '').strip()
             if excerpt:
-                # Show first ~200 chars of original text
-                short = excerpt[:200] + ("..." if len(excerpt) > 200 else "")
-                lines.append(f"  - **原文摘录：** {short}")
+                lines.append(f"  - **原文摘录：** {excerpt}")
             lines.append(f"  - **来源：** {a['source_link_markdown']}")
             lines.append("")
     return "\n".join(lines).strip() + "\n"
@@ -290,11 +288,6 @@ def render_html_fragment(run_summary: RunSummary, clusters: List[TopicCluster]) 
     for i, c in enumerate(selected):
         article_cards = []
         for a in pick_supporting_articles(c.supporting_articles, limit=per_theme_quota.get(i, 1)):
-            excerpt_html = ""
-            content_excerpt = (a.get('content_excerpt') or '').strip()
-            if content_excerpt:
-                short = escape(content_excerpt[:300])
-                excerpt_html = f"<div style='font-size:13px;line-height:1.65;color:#374151;margin-bottom:8px;padding:8px 10px;background:#F9FAFB;border-radius:6px;border-left:3px solid #D1D5DB'>{short}{'...' if len(content_excerpt) > 300 else ''}</div>"
             article_cards.append(
                 f"""
                 <tr><td style='padding:0 0 10px 0'>
@@ -302,7 +295,6 @@ def render_html_fragment(run_summary: RunSummary, clusters: List[TopicCluster]) 
                     <tr><td style='padding:14px 14px 12px'>
                       <div style='font-size:19px;line-height:1.45;font-weight:700;color:#111827;margin-bottom:6px'>{escape(a.get('title',''))}</div>
                       <div style='font-size:16px;line-height:1.7;color:#111827;margin-bottom:8px'>{format_summary_lines(a.get('article_summary_zh',''))}</div>
-                      {excerpt_html}
                       <div style='font-size:13px;line-height:1.6;color:#4B5563'>来源：<a href='{escape(a.get('url',''))}' style='color:#2563EB;text-decoration:none'>@{escape(a.get('institution_name','官方来源'))}（原文链接）</a></div>
                     </td></tr>
                   </table>
